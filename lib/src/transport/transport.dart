@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
@@ -24,7 +25,12 @@ abstract class ClientTransport {
 class StdioClientTransport implements ClientTransport {
   final Process _process;
   final _messageController = StreamController<dynamic>.broadcast();
+  final List<StreamSubscription> _processSubscriptions = [];
   final _closeCompleter = Completer<void>();
+
+  // Message queue for synchronized sending
+  final _messageQueue = Queue<String>();
+  bool _isSending = false;
 
   StdioClientTransport._internal(this._process) {
     _initialize();
@@ -37,7 +43,7 @@ class StdioClientTransport implements ClientTransport {
     String? workingDirectory,
     Map<String, String>? environment,
   }) async {
-    Logger.debug('[Flutter MCP] Starting process: $command ${arguments.join(' ')}');
+    Logger.debug('[MCP Client] Starting process: $command ${arguments.join(' ')}');
 
     final process = await Process.start(
       command,
@@ -50,61 +56,66 @@ class StdioClientTransport implements ClientTransport {
   }
 
   void _initialize() {
-    Logger.debug('[Flutter MCP] Initializing STDIO transport');
+    Logger.debug('[MCP Client] Initializing STDIO transport');
 
-    // Handle stdout from the process
-    _process.stdout
+    // Process stdout stream and handle messages
+    var stdoutSubscription = _process.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .where((line) => line.isNotEmpty)
         .map((line) {
       try {
-        Logger.debug('[Flutter MCP] Raw received line: $line');
+        Logger.debug('[MCP Client] Raw received line: $line');
         final parsedMessage = jsonDecode(line);
-        Logger.debug('[Flutter MCP] Parsed message: $parsedMessage');
+        Logger.debug('[MCP Client] Parsed message: $parsedMessage');
         return parsedMessage;
       } catch (e) {
-        Logger.debug('[Flutter MCP] JSON parsing error: $e');
-        Logger.debug('[Flutter MCP] Problematic line: $line');
+        Logger.debug('[MCP Client] JSON parsing error: $e');
+        Logger.debug('[MCP Client] Problematic line: $line');
         return null;
       }
     })
         .where((message) => message != null)
         .listen(
           (message) {
-        Logger.debug('[Flutter MCP] Processing message: $message');
+        Logger.debug('[MCP Client] Processing message: $message');
         if (!_messageController.isClosed) {
           _messageController.add(message);
         }
       },
       onError: (error) {
-        Logger.debug('[Flutter MCP] Stream error: $error');
+        Logger.debug('[MCP Client] Stream error: $error');
         _handleTransportError(error);
       },
       onDone: () {
-        Logger.debug('[Flutter MCP] stdout stream done');
+        Logger.debug('[MCP Client] stdout stream done');
         _handleStreamClosure();
       },
       cancelOnError: false,
     );
 
-    // Log stderr for debugging
-    _process.stderr
+    // Store subscription for cleanup
+    _processSubscriptions.add(stdoutSubscription);
+
+    // Log stderr output
+    var stderrSubscription = _process.stderr
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      Logger.debug('[Flutter MCP] Server stderr: $line');
+      Logger.debug('[MCP Client] Server stderr: $line');
     });
+
+    _processSubscriptions.add(stderrSubscription);
 
     // Handle process exit
     _process.exitCode.then((exitCode) {
-      Logger.debug('[Flutter MCP] Process exited with code: $exitCode');
+      Logger.debug('[MCP Client] Process exited with code: $exitCode');
       _handleStreamClosure();
     });
   }
 
   void _handleTransportError(dynamic error) {
-    Logger.debug('[Flutter MCP] Transport error: $error');
+    Logger.debug('[MCP Client] Transport error: $error');
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.completeError(error);
     }
@@ -112,7 +123,7 @@ class StdioClientTransport implements ClientTransport {
   }
 
   void _handleStreamClosure() {
-    Logger.debug('[Flutter MCP] Handling stream closure');
+    Logger.debug('[MCP Client] Handling stream closure');
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.complete();
     }
@@ -120,6 +131,12 @@ class StdioClientTransport implements ClientTransport {
   }
 
   void _cleanup() {
+    // Cancel all subscriptions
+    for (var subscription in _processSubscriptions) {
+      subscription.cancel();
+    }
+    _processSubscriptions.clear();
+
     if (!_messageController.isClosed) {
       _messageController.close();
     }
@@ -129,7 +146,7 @@ class StdioClientTransport implements ClientTransport {
       _process.kill();
     } catch (e) {
       // Process might already be terminated
-      Logger.debug('[Flutter MCP] Error killing process: $e');
+      Logger.debug('[MCP Client] Error killing process: $e');
     }
   }
 
@@ -139,26 +156,64 @@ class StdioClientTransport implements ClientTransport {
   @override
   Future<void> get onClose => _closeCompleter.future;
 
+  // Add message to queue and process it
   @override
   void send(dynamic message) {
     try {
       final jsonMessage = jsonEncode(message);
-      Logger.debug('[Flutter MCP] Sending message: $jsonMessage');
+      Logger.debug('[MCP Client] Queueing message: $jsonMessage');
 
-      _process.stdin.writeln(jsonMessage);
-      _process.stdin.flush();
+      // Add message to queue
+      _messageQueue.add(jsonMessage);
 
-      Logger.debug('[Flutter MCP] Message sent successfully');
+      // Start processing queue if not already doing so
+      _processMessageQueue();
     } catch (e) {
-      Logger.debug('[Flutter MCP] Error sending message: $e');
-      Logger.debug('[Flutter MCP] Original message: $message');
+      Logger.debug('[MCP Client] Error encoding message: $e');
+      Logger.debug('[MCP Client] Original message: $message');
       rethrow;
+    }
+  }
+
+  // Process messages in queue one at a time
+  void _processMessageQueue() {
+    if (_isSending || _messageQueue.isEmpty) {
+      return;
+    }
+
+    _isSending = true;
+
+    // Process all messages in queue
+    _sendNextMessage();
+  }
+
+  void _sendNextMessage() {
+    if (_messageQueue.isEmpty) {
+      _isSending = false;
+      return;
+    }
+
+    final message = _messageQueue.removeFirst();
+
+    try {
+      Logger.debug('[MCP Client] Sending message: $message');
+      _process.stdin.writeln(message);
+
+      // Use Timer to give stdin a chance to process
+      Timer(Duration(milliseconds: 10), () {
+        Logger.debug('[MCP Client] Message sent successfully');
+        _sendNextMessage();
+      });
+    } catch (e) {
+      Logger.debug('[MCP Client] Error sending message: $e');
+      _isSending = false;
+      throw Exception('Failed to write to process stdin: $e');
     }
   }
 
   @override
   void close() {
-    Logger.debug('[Flutter MCP] Closing StdioClientTransport');
+    Logger.debug('[MCP Client] Closing StdioClientTransport');
     _cleanup();
   }
 }
@@ -194,22 +249,22 @@ class SseClientTransport implements ClientTransport {
   }
 
   void _handleOpen(String? endpointUrl) {
-    Logger.debug('[Flutter MCP] SSE connection opened');
+    Logger.debug('[MCP Client] SSE connection opened');
     _messageEndpoint = endpointUrl;
   }
 
   void _handleServerMessage(dynamic data) {
     try {
-      Logger.debug('[Flutter MCP] Received SSE message: $data');
+      Logger.debug('[MCP Client] Received SSE message: $data');
       final jsonData = jsonDecode(data);
       _messageController.add(jsonData);
     } catch (e) {
-      Logger.debug('[Flutter MCP] Error parsing SSE message: $e');
+      Logger.debug('[MCP Client] Error parsing SSE message: $e');
     }
   }
 
   void _handleError(dynamic error) {
-    Logger.debug('[Flutter MCP] SSE error: $error');
+    Logger.debug('[MCP Client] SSE error: $error');
     _handleTransportError(error);
   }
 
@@ -241,7 +296,7 @@ class SseClientTransport implements ClientTransport {
 
     try {
       final jsonMessage = jsonEncode(message);
-      Logger.debug('[Flutter MCP] Sending message: $jsonMessage');
+      Logger.debug('[MCP Client] Sending message: $jsonMessage');
 
       final url = Uri.parse(_messageEndpoint!);
       final client = HttpClient();
@@ -259,22 +314,22 @@ class SseClientTransport implements ClientTransport {
 
       if (response.statusCode != 200) {
         final responseBody = await response.transform(utf8.decoder).join();
-        Logger.debug('[Flutter MCP] Error response: $responseBody');
+        Logger.debug('[MCP Client] Error response: $responseBody');
         throw McpError('Error sending message: ${response.statusCode}');
       }
 
       client.close();
-      Logger.debug('[Flutter MCP] Message sent successfully');
+      Logger.debug('[MCP Client] Message sent successfully');
     } catch (e) {
-      Logger.debug('[Flutter MCP] Error sending message: $e');
-      Logger.debug('[Flutter MCP] Original message: $message');
+      Logger.debug('[MCP Client] Error sending message: $e');
+      Logger.debug('[MCP Client] Original message: $message');
       rethrow;
     }
   }
 
   @override
   void close() {
-    Logger.debug('[Flutter MCP] Closing SseClientTransport');
+    Logger.debug('[MCP Client] Closing SseClientTransport');
     _cleanup();
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.complete();

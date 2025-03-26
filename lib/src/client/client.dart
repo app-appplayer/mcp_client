@@ -99,6 +99,64 @@ class Client {
     }
   }
 
+  Future<void> connectWithRetry(
+      ClientTransport transport, {
+        int maxRetries = 3,
+        Duration delay = const Duration(seconds: 2)
+      }) async {
+    if (_transport != null) {
+      throw McpError('Client is already connected to a transport');
+    }
+
+    if (_connecting) {
+      throw McpError('Client is already connecting to a transport');
+    }
+
+    _connecting = true;
+    int attempts = 0;
+
+    while (attempts < maxRetries) {
+      try {
+        _transport = transport;
+        _transport!.onMessage.listen(_handleMessage);
+        _transport!.onClose.then((_) {
+          _onDisconnect();
+        });
+
+        // 메시지 처리 설정
+        _messageController.stream.listen((message) async {
+          try {
+            await _processMessage(message);
+          } catch (e) {
+            Logger.debug('[MCP] Error processing message: $e');
+          }
+        });
+
+        // 연결 초기화
+        await initialize();
+        _connecting = false;
+        return; // 성공적으로 연결됨
+      } catch (e) {
+        // 실패한 경우 모든 리소스 정리
+        if (_transport != null) {
+          try {
+            _transport!.close();
+          } catch (_) {}
+          _transport = null;
+        }
+
+        attempts++;
+        if (attempts >= maxRetries) {
+          _connecting = false;
+          throw McpError('Failed to connect after $maxRetries attempts: $e');
+        }
+
+        Logger.debug('Connection attempt $attempts failed: $e. Retrying in ${delay.inSeconds} seconds...');
+        await Future.delayed(delay);
+      }
+    }
+  }
+
   /// Initialize the connection to the server
   Future<void> initialize() async {
     if (_initialized) {
