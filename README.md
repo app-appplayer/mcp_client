@@ -10,9 +10,12 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
 - Utilize interaction patterns through **Prompts**
 - Support for **Roots** management
 - Support for **Sampling** (LLM text generation)
+- Track **Progress** of long-running operations
+- **Health Monitoring** of server status
+- **Operation Cancellation** for ongoing tasks
 - Multiple transport layers:
-    - Standard I/O for local process communication
-    - Server-Sent Events (SSE) for HTTP-based communication
+  - Standard I/O for local process communication
+  - Server-Sent Events (SSE) for HTTP-based communication
 - Cross-platform support: Android, iOS, web, Linux, Windows, macOS
 
 ## Protocol Version
@@ -40,7 +43,7 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  mcp_client: ^0.1.0
+  mcp_client: ^0.1.2
 ```
 
 Or install via command line:
@@ -124,14 +127,17 @@ final resourceResult = await client.readResource('file:///path/to/file.txt');
 final content = resourceResult.contents.first;
 stderr.writeln('Resource content: ${content.text}');
 
+// Get a resource using a template
+final templateResult = await client.getResourceWithTemplate('file:///{path}', {
+  'path': 'example.txt'
+});
+stderr.writeln('Template result: ${templateResult.contents.first.text}');
+
 // Subscribe to resource updates
 await client.subscribeResource('file:///path/to/file.txt');
-client.onResourceUpdated((uri) {
+client.onResourceContentUpdated((uri, content) {
   stderr.writeln('Resource updated: $uri');
-  // Fetch the updated content
-  client.readResource(uri).then((result) {
-  stderr.writeln('New content: ${result.contents.first.text}');
-  });
+  stderr.writeln('New content: ${content.text}');
 });
 
 // Unsubscribe when no longer needed
@@ -153,11 +159,25 @@ final result = await client.callTool('search-web', {
   'maxResults': 5,
 });
 
+// Call a tool with progress tracking
+final trackingResult = await client.callToolWithTracking('long-running-operation', {
+  'parameter': 'value'
+});
+final operationId = trackingResult.operationId;
+
+// Register progress handler
+client.onProgress((requestId, progress, message) {
+  stderr.writeln('Operation $requestId: $progress% - $message');
+});
+
 // Process the result
 final content = result.content.first;
 if (content is TextContent) {
   stderr.writeln('Search results: ${content.text}');
 }
+
+// Cancel an operation if needed
+await client.cancelOperation(operationId);
 ```
 
 ### Prompts
@@ -243,6 +263,26 @@ final result = await client.createMessage(request);
 // Process the result
 stderr.writeln('Model used: ${result.model}');
 stderr.writeln('Response: ${(result.content as TextContent).text}');
+
+// Register for sampling responses
+client.onSamplingResponse((requestId, result) {
+  stderr.writeln('Sampling response for request $requestId:');
+  stderr.writeln('Model: ${result.model}');
+  stderr.writeln('Content: ${(result.content as TextContent).text}');
+});
+```
+
+### Server Health
+
+Monitor the health status of connected MCP servers:
+
+```dart
+// Get server health status
+final health = await client.healthCheck();
+stderr.writeln('Server running: ${health.isRunning}');
+stderr.writeln('Connected sessions: ${health.connectedSessions}');
+stderr.writeln('Registered tools: ${health.registeredTools}');
+stderr.writeln('Uptime: ${health.uptime.inMinutes} minutes');
 ```
 
 ## Transport Layers
@@ -253,10 +293,10 @@ For command-line tools and direct integrations:
 
 ```dart
 final transport = await McpClient.createStdioTransport(
-  command: 'npx',
-  arguments: ['-y', '@modelcontextprotocol/server-filesystem', '/path/to/allowed/directory'],
-  workingDirectory: '/path/to/working/directory',
-  environment: {'ENV_VAR': 'value'},
+command: 'npx',
+arguments: ['-y', '@modelcontextprotocol/server-filesystem', '/path/to/allowed/directory'],
+workingDirectory: '/path/to/working/directory',
+environment: {'ENV_VAR': 'value'},
 );
 await client.connect(transport);
 ```
@@ -292,34 +332,34 @@ Register for server-side notifications:
 ```dart
 // Handle tools list changes
 client.onToolsListChanged(() {
-  stderr.writeln('Tools list has changed');
-  client.listTools().then((tools) {
-    stderr.writeln('New tools: ${tools.map((t) => t.name).join(', ')}');
-  });
+stderr.writeln('Tools list has changed');
+client.listTools().then((tools) {
+stderr.writeln('New tools: ${tools.map((t) => t.name).join(', ')}');
+});
 });
 
 // Handle resources list changes
 client.onResourcesListChanged(() {
-  stderr.writeln('Resources list has changed');
-  client.listResources().then((resources) {
-    stderr.writeln('New resources: ${resources.map((r) => r.name).join(', ')}');
-  });
+stderr.writeln('Resources list has changed');
+client.listResources().then((resources) {
+stderr.writeln('New resources: ${resources.map((r) => r.name).join(', ')}');
+});
 });
 
 // Handle prompts list changes
 client.onPromptsListChanged(() {
-  stderr.writeln('Prompts list has changed');
-  client.listPrompts().then((prompts) {
-    stderr.writeln('New prompts: ${prompts.map((p) => p.name).join(', ')}');
-  });
+stderr.writeln('Prompts list has changed');
+client.listPrompts().then((prompts) {
+stderr.writeln('New prompts: ${prompts.map((p) => p.name).join(', ')}');
+});
 });
 
 // Handle server logging
 client.onLogging((level, message, logger, data) {
-  stderr.writeln('Server log [$level]${logger != null ? " [$logger]" : ""}: $message');
-  if (data != null) {
-    stderr.writeln('Additional data: $data');
-  }
+stderr.writeln('Server log [$level]${logger != null ? " [$logger]" : ""}: $message');
+if (data != null) {
+stderr.writeln('Additional data: $data');
+}
 });
 ```
 
@@ -327,11 +367,11 @@ client.onLogging((level, message, logger, data) {
 
 ```dart
 try {
-  await client.callTool('unknown-tool', {});
+await client.callTool('unknown-tool', {});
 } on McpError catch (e) {
-  stderr.writeln('MCP error (${e.code}): ${e.message}');
+stderr.writeln('MCP error (${e.code}): ${e.message}');
 } catch (e) {
-  stderr.writeln('Unexpected error: $e');
+stderr.writeln('Unexpected error: $e');
 }
 ```
 

@@ -836,6 +836,194 @@ class JsonRpcMessage {
   }
 }
 
+/// Server health information
+class ServerHealth {
+  /// Whether the server is running
+  final bool isRunning;
+
+  /// Number of connected client sessions
+  final int connectedSessions;
+
+  /// Number of registered tools
+  final int registeredTools;
+
+  /// Number of registered resources
+  final int registeredResources;
+
+  /// Number of registered prompts
+  final int registeredPrompts;
+
+  /// When the server started
+  final DateTime startTime;
+
+  /// How long the server has been running
+  final Duration uptime;
+
+  /// Detailed performance metrics
+  final Map<String, dynamic> metrics;
+
+  ServerHealth({
+    required this.isRunning,
+    required this.connectedSessions,
+    required this.registeredTools,
+    required this.registeredResources,
+    required this.registeredPrompts,
+    required this.startTime,
+    required this.uptime,
+    required this.metrics,
+  });
+
+  factory ServerHealth.fromJson(Map<String, dynamic> json) {
+    return ServerHealth(
+      isRunning: json['isRunning'] as bool,
+      connectedSessions: json['connectedSessions'] as int,
+      registeredTools: json['registeredTools'] as int,
+      registeredResources: json['registeredResources'] as int,
+      registeredPrompts: json['registeredPrompts'] as int,
+      startTime: DateTime.parse(json['startTime'] as String),
+      uptime: Duration(seconds: json['uptimeSeconds'] as int),
+      metrics: json['metrics'] as Map<String, dynamic>,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'isRunning': isRunning,
+      'connectedSessions': connectedSessions,
+      'registeredTools': registeredTools,
+      'registeredResources': registeredResources,
+      'registeredPrompts': registeredPrompts,
+      'startTime': startTime.toIso8601String(),
+      'uptimeSeconds': uptime.inSeconds,
+      'metrics': metrics,
+    };
+  }
+}
+
+/// Pending operation for cancellation support
+class PendingOperation {
+  /// Unique identifier for this operation
+  final String id;
+
+  /// Session ID where this operation is running
+  final String sessionId;
+
+  /// Type of the operation (e.g., "tool:calculator")
+  final String type;
+
+  /// When the operation was created
+  final DateTime createdAt;
+
+  /// Optional ID of the request that initiated this operation
+  final String? requestId;
+
+  /// Whether this operation has been cancelled
+  bool isCancelled = false;
+
+  PendingOperation({
+    required this.id,
+    required this.sessionId,
+    required this.type,
+    this.requestId,
+  }) : createdAt = DateTime.now();
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'sessionId': sessionId,
+      'type': type,
+      'createdAt': createdAt.toIso8601String(),
+      'isCancelled': isCancelled,
+      if (requestId != null) 'requestId': requestId,
+    };
+  }
+
+  factory PendingOperation.fromJson(Map<String, dynamic> json) {
+    final operation = PendingOperation(
+      id: json['id'] as String,
+      sessionId: json['sessionId'] as String,
+      type: json['type'] as String,
+      requestId: json['requestId'] as String?,
+    );
+
+    operation.isCancelled = json['isCancelled'] as bool? ?? false;
+
+    return operation;
+  }
+}
+
+/// Progress update for long-running operations
+class ProgressUpdate {
+  /// ID of the request this progress relates to
+  final String requestId;
+
+  /// Progress value between 0.0 and 1.0
+  final double progress;
+
+  /// Optional message describing the current status
+  final String message;
+
+  ProgressUpdate({
+    required this.requestId,
+    required this.progress,
+    required this.message,
+  });
+
+  factory ProgressUpdate.fromJson(Map<String, dynamic> json) {
+    return ProgressUpdate(
+      requestId: json['requestId'] as String,
+      progress: json['progress'] as double,
+      message: json['message'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'requestId': requestId,
+      'progress': progress,
+      'message': message,
+    };
+  }
+}
+
+/// Cached resource item for performance optimization
+class CachedResource {
+  /// URI of the cached resource
+  final String uri;
+
+  /// Content of the resource
+  final ReadResourceResult content;
+
+  /// When the resource was cached
+  final DateTime cachedAt;
+
+  /// How long the cache should be valid
+  final Duration maxAge;
+
+  CachedResource({
+    required this.uri,
+    required this.content,
+    required this.cachedAt,
+    required this.maxAge,
+  });
+
+  /// Check if the cache entry has expired
+  bool get isExpired {
+    final now = DateTime.now();
+    final expiresAt = cachedAt.add(maxAge);
+    return now.isAfter(expiresAt);
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'uri': uri,
+      'content': content.toJson(),
+      'cachedAt': cachedAt.toIso8601String(),
+      'maxAgeSeconds': maxAge.inSeconds,
+    };
+  }
+}
+
 /// Logging levels for MCP protocol
 enum McpLogLevel {
   debug,

@@ -123,7 +123,7 @@ class Client {
           _onDisconnect();
         });
 
-        // 메시지 처리 설정
+        // Message handling setup
         _messageController.stream.listen((message) async {
           try {
             await _processMessage(message);
@@ -132,12 +132,12 @@ class Client {
           }
         });
 
-        // 연결 초기화
+        // Initialize connection
         await initialize();
         _connecting = false;
-        return; // 성공적으로 연결됨
+        return; // Successfully connected
       } catch (e) {
-        // 실패한 경우 모든 리소스 정리
+        // Clean up resources on failure
         if (_transport != null) {
           try {
             _transport!.close();
@@ -182,7 +182,7 @@ class Client {
 
     final serverProtoVersion = response['protocolVersion'];
     if (serverProtoVersion != protocolVersion) {
-      log.warning('[MCP] Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion');
+      _validateProtocolVersion(serverProtoVersion);
     }
 
     _serverInfo = response['serverInfo'];
@@ -193,6 +193,24 @@ class Client {
 
     _initialized = true;
     log.debug('[MCP] Initialization complete');
+  }
+
+  /// Validate protocol version compatibility
+  void _validateProtocolVersion(String serverProtoVersion) {
+    log.warning('[MCP] Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion');
+
+    // Check if server protocol version is at least compatible
+    try {
+      final clientDate = DateTime.parse(protocolVersion);
+      final serverDate = DateTime.parse(serverProtoVersion);
+
+      if (serverDate.isBefore(clientDate)) {
+        log.warning('[MCP] Server protocol version ($serverProtoVersion) is older than client protocol version ($protocolVersion)');
+      }
+    } catch (e) {
+      // Date parsing failed, fallback to string comparison
+      log.warning('[MCP] Unable to parse protocol versions as dates for comparison');
+    }
   }
 
   /// List available tools on the server
@@ -230,6 +248,57 @@ class Client {
     return CallToolResult.fromJson(response);
   }
 
+  /// Call a tool and get the operation ID for tracking progress
+  ///
+  /// [name] - The name of the tool to call
+  /// [arguments] - The arguments to pass to the tool
+  /// [trackProgress] - Whether to track progress for this tool call
+  ///
+  /// Returns a Future that resolves to a tuple of (operationId, result)
+  Future<ToolCallTracking> callToolWithTracking(
+      String name,
+      Map<String, dynamic> arguments,
+      {bool trackProgress = true}
+      ) async {
+    if (!_initialized) {
+      throw McpError('Client is not initialized');
+    }
+
+    if (_serverCapabilities?.tools != true) {
+      throw McpError('Server does not support tools');
+    }
+
+    final params = {
+      'name': name,
+      'arguments': Map<String, dynamic>.from(arguments),
+      'trackProgress': trackProgress,
+    };
+
+    final response = await _sendRequest('tools/call', params);
+    final operationId = response['operationId'] as String?;
+    final result = CallToolResult.fromJson(response);
+
+    return ToolCallTracking(
+      operationId: operationId,
+      result: result,
+    );
+  }
+
+  /// Cancel an operation that is in progress on the server
+  ///
+  /// [operationId] - The ID of the operation to cancel
+  ///
+  /// Returns a Future that completes when the cancellation request is processed
+  Future<void> cancelOperation(String operationId) async {
+    if (!_initialized) {
+      throw McpError('Client is not initialized');
+    }
+
+    await _sendRequest('cancel', {
+      'id': operationId,
+    });
+  }
+
   /// List available resources on the server
   Future<List<Resource>> listResources() async {
     if (!_initialized) {
@@ -260,6 +329,32 @@ class Client {
     });
 
     return ReadResourceResult.fromJson(response);
+  }
+
+  /// Get a resource using a template
+  ///
+  /// [templateUri] - The URI template to use
+  /// [params] - Parameters to fill in the template
+  ///
+  /// Returns a Future that resolves to the resource content
+  Future<ReadResourceResult> getResourceWithTemplate(String templateUri, Map<String, dynamic> params) async {
+    if (!_initialized) {
+      throw McpError('Client is not initialized');
+    }
+
+    if (_serverCapabilities?.resources != true) {
+      throw McpError('Server does not support resources');
+    }
+
+    // Construct a URI from the template and parameters
+    // This is a simple implementation - for complex URI templates,
+    // a more robust implementation would be needed
+    String uri = templateUri;
+    params.forEach((key, value) {
+      uri = uri.replaceAll('{$key}', Uri.encodeComponent(value.toString()));
+    });
+
+    return await readResource(uri);
   }
 
   /// Subscribe to a resource
@@ -360,6 +455,26 @@ class Client {
     return CreateMessageResult.fromJson(response);
   }
 
+  /// Request the current health status of the server
+  ///
+  /// Returns a Map containing server health metrics including:
+  /// - is_running: Whether the server is running
+  /// - connected_sessions: Number of connected sessions
+  /// - registered_tools: Number of registered tools
+  /// - registered_resources: Number of registered resources
+  /// - registered_prompts: Number of registered prompts
+  /// - start_time: When the server started
+  /// - uptime_seconds: How long the server has been running
+  /// - metrics: Detailed performance metrics
+  Future<ServerHealth> healthCheck() async {
+    if (!_initialized) {
+      throw McpError('Client is not initialized');
+    }
+
+    final response = await _sendRequest('health/check', {});
+    return ServerHealth.fromJson(response);
+  }
+
   /// Add a root
   Future<void> addRoot(Root root) async {
     if (!_initialized) {
@@ -454,6 +569,49 @@ class Client {
     onNotification('notifications/resources/updated', (params) {
       final uri = params['uri'] as String;
       handler(uri);
+    });
+  }
+
+  /// Register a handler for resource update notifications with content
+  ///
+  /// The handler will be called with:
+  /// [uri] - The URI of the updated resource
+  /// [content] - The new content of the resource
+  void onResourceContentUpdated(Function(String uri, ResourceContentInfo content) handler) {
+    onNotification('notifications/resources/updated', (params) {
+      final uri = params['uri'] as String;
+      final contentData = params['content'] as Map<String, dynamic>;
+      final content = ResourceContentInfo.fromJson(contentData);
+      handler(uri, content);
+    });
+  }
+
+  /// Register a handler for progress updates from the server
+  ///
+  /// The handler will be called with:
+  /// [requestId] - The ID of the request that this progress update relates to
+  /// [progress] - A value between 0.0 and 1.0 indicating the progress
+  /// [message] - Optional message describing the current progress state
+  void onProgress(Function(String requestId, double progress, String message) handler) {
+    onNotification('progress', (params) {
+      final requestId = params['requestId'] as String? ?? params['request_id'] as String;
+      final progress = params['progress'] as double;
+      final message = params['message'] as String;
+      handler(requestId, progress, message);
+    });
+  }
+
+  /// Register a handler for sampling response notifications
+  ///
+  /// The handler will be called with:
+  /// [requestId] - The ID of the sampling request
+  /// [result] - The sampling result from the LLM
+  void onSamplingResponse(Function(String requestId, CreateMessageResult result) handler) {
+    onNotification('sampling/response', (params) {
+      final requestId = params['requestId'] as String? ?? params['request_id'] as String;
+      final resultData = params['result'] as Map<String, dynamic>;
+      final result = CreateMessageResult.fromJson(resultData);
+      handler(requestId, result);
     });
   }
 
@@ -694,5 +852,19 @@ class ServerCapabilities {
     this.prompts = false,
     this.promptsListChanged = false,
     this.sampling = false,
+  });
+}
+
+/// Class to hold result of a tracked tool call
+class ToolCallTracking {
+  /// Operation ID for tracking progress
+  final String? operationId;
+
+  /// Result of the tool call
+  final CallToolResult result;
+
+  ToolCallTracking({
+    this.operationId,
+    required this.result,
   });
 }
