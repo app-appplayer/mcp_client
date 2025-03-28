@@ -7,7 +7,7 @@ import 'package:mcp_client/src/models/models.dart';
 /// Example MCP client application that connects to a filesystem server and demonstrates key functionality
 void main() async {
   // Set up logging to use stderr instead of stdout
-  Logger.currentLevel = LogLevel.debug;
+  log.setLevel(LogLevel.debug);
 
   // Create a log file for output
   final logFile = File('mcp_client_example.log');

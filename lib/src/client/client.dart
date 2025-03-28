@@ -84,7 +84,7 @@ class Client {
       try {
         await _processMessage(message);
       } catch (e) {
-        Logger.debug('[MCP] Error processing message: $e');
+        log.debug('[MCP] Error processing message: $e');
       }
     });
 
@@ -128,7 +128,7 @@ class Client {
           try {
             await _processMessage(message);
           } catch (e) {
-            Logger.debug('[MCP] Error processing message: $e');
+            log.debug('[MCP] Error processing message: $e');
           }
         });
 
@@ -151,7 +151,7 @@ class Client {
           throw McpError('Failed to connect after $maxRetries attempts: $e');
         }
 
-        Logger.debug('Connection attempt $attempts failed: $e. Retrying in ${delay.inSeconds} seconds...');
+        log.debug('Connection attempt $attempts failed: $e. Retrying in ${delay.inSeconds} seconds...');
         await Future.delayed(delay);
       }
     }
@@ -182,7 +182,7 @@ class Client {
 
     final serverProtoVersion = response['protocolVersion'];
     if (serverProtoVersion != protocolVersion) {
-      Logger.warning('[MCP] Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion');
+      log.warning('[MCP] Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion');
     }
 
     _serverInfo = response['serverInfo'];
@@ -192,7 +192,7 @@ class Client {
     _sendNotification('initialized', {});
 
     _initialized = true;
-    Logger.debug('[MCP] Initialization complete');
+    log.debug('[MCP] Initialization complete');
   }
 
   /// List available tools on the server
@@ -498,7 +498,7 @@ class Client {
       );
       _messageController.add(message);
     } catch (e) {
-      Logger.debug('[MCP] Error parsing message: $e');
+      log.debug('[MCP] Error parsing message: $e');
     }
   }
 
@@ -509,7 +509,7 @@ class Client {
     } else if (message.isNotification) {
       _handleNotification(message);
     } else {
-      Logger.debug('[MCP] Ignoring unexpected message type: ${message.toJson()}');
+      log.debug('[MCP] Ignoring unexpected message type: ${message.toJson()}');
     }
   }
 
@@ -517,7 +517,7 @@ class Client {
   void _handleResponse(JsonRpcMessage response) {
     final id = response.id;
     if (id == null || id is! int || !_requestCompleters.containsKey(id)) {
-      Logger.debug('[MCP] Received response with unknown id: $id');
+      log.debug('[MCP] Received response with unknown id: $id');
       return;
     }
 
@@ -542,10 +542,10 @@ class Client {
       try {
         handler(params);
       } catch (e) {
-        Logger.debug('[MCP] Error in notification handler: $e');
+        log.debug('[MCP] Error in notification handler: $e');
       }
     } else {
-      Logger.debug('[MCP] No handler for notification: $method');
+      log.debug('[MCP] No handler for notification: $method');
     }
   }
 

@@ -1,3 +1,10 @@
+## 0.1.2
+
+* Logging System Improvement
+    * Enhanced the default logger to allow dynamic log level configuration
+    * Reduced redundant log statements and improved performance for higher-volume logging
+    * Added options to colorize logs and include timestamps for easier debugging
+
 ## 0.1.1
 
 * Bug fixes

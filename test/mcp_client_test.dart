@@ -16,7 +16,7 @@ void main() {
 
     setUp(() {
       // Use a lower log level for tests to avoid cluttering test output
-      Logger.currentLevel = LogLevel.error;
+      log.setLevel(LogLevel.error);
 
       // Create client with default capabilities
       client = McpClient.createClient(

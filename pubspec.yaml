@@ -1,6 +1,6 @@
 name: mcp_client
 description: Dart plugin for implementing Model Context Protocol (MCP) clients. Provides tools to build MCP clients that can connect to MCP servers to access data, functionality, and interaction patterns for LLM applications.
-version: 0.1.1
+version: 0.1.2
 homepage: https://github.com/app-appplayer/mcp_client
 repository: https://github.com/app-appplayer/mcp_client
 issue_tracker: https://github.com/app-appplayer/mcp_client/issues
