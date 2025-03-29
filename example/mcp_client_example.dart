@@ -1,8 +1,6 @@
 import 'dart:io';
 import 'package:mcp_client/logger.dart';
 import 'package:mcp_client/mcp_client.dart';
-import 'package:mcp_client/src/client/client.dart';
-import 'package:mcp_client/src/models/models.dart';
 
 /// Example MCP client application that connects to a filesystem server and demonstrates key functionality
 void main() async {

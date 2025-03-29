@@ -80,7 +80,7 @@ void main() async {
   
   // List available tools on the server
   final tools = await client.listTools();
-  stderr.writeln('Available tools: ${tools.map((t) => t.name).join(', ')}');
+  log.debug('Available tools: ${tools.map((t) => t.name).join(', ')}');
   
   // Call a tool
   final result = await client.callTool('calculator', {
@@ -88,7 +88,7 @@ void main() async {
     'a': 5,
     'b': 3,
   });
-  stderr.writeln('Result: ${(result.content.first as TextContent).text}');
+  log.debug('Result: ${(result.content.first as TextContent).text}');
   
   // Disconnect when done
   client.disconnect();
@@ -120,24 +120,24 @@ Resources provide access to data from MCP servers. They're similar to GET endpoi
 ```dart
 // List available resources
 final resources = await client.listResources();
-stderr.writeln('Available resources: ${resources.map((r) => r.name).join(', ')}');
+log.debug('Available resources: ${resources.map((r) => r.name).join(', ')}');
 
 // Read a resource
 final resourceResult = await client.readResource('file:///path/to/file.txt');
 final content = resourceResult.contents.first;
-stderr.writeln('Resource content: ${content.text}');
+log.debug('Resource content: ${content.text}');
 
 // Get a resource using a template
 final templateResult = await client.getResourceWithTemplate('file:///{path}', {
   'path': 'example.txt'
 });
-stderr.writeln('Template result: ${templateResult.contents.first.text}');
+log.debug('Template result: ${templateResult.contents.first.text}');
 
 // Subscribe to resource updates
 await client.subscribeResource('file:///path/to/file.txt');
 client.onResourceContentUpdated((uri, content) {
-  stderr.writeln('Resource updated: $uri');
-  stderr.writeln('New content: ${content.text}');
+  log.debug('Resource updated: $uri');
+  log.debug('New content: ${content.text}');
 });
 
 // Unsubscribe when no longer needed
@@ -151,7 +151,7 @@ Tools allow you to execute functionality exposed by MCP servers:
 ```dart
 // List available tools
 final tools = await client.listTools();
-stderr.writeln('Available tools: ${tools.map((t) => t.name).join(', ')}');
+log.debug('Available tools: ${tools.map((t) => t.name).join(', ')}');
 
 // Call a tool
 final result = await client.callTool('search-web', {
@@ -167,13 +167,13 @@ final operationId = trackingResult.operationId;
 
 // Register progress handler
 client.onProgress((requestId, progress, message) {
-  stderr.writeln('Operation $requestId: $progress% - $message');
+  log.debug('Operation $requestId: $progress% - $message');
 });
 
 // Process the result
 final content = result.content.first;
 if (content is TextContent) {
-  stderr.writeln('Search results: ${content.text}');
+  log.debug('Search results: ${content.text}');
 }
 
 // Cancel an operation if needed
@@ -187,7 +187,7 @@ Prompts are reusable templates provided by servers that help with common interac
 ```dart
 // List available prompts
 final prompts = await client.listPrompts();
-stderr.writeln('Available prompts: ${prompts.map((p) => p.name).join(', ')}');
+log.debug('Available prompts: ${prompts.map((p) => p.name).join(', ')}');
 
 // Get a prompt result
 final promptResult = await client.getPrompt('analyze-code', {
@@ -199,7 +199,7 @@ final promptResult = await client.getPrompt('analyze-code', {
 for (final message in promptResult.messages) {
   final content = message.content;
   if (content is TextContent) {
-  stderr.writeln('${message.role}: ${content.text}');
+    log.debug('${message.role}: ${content.text}');
   }
 }
 ```
@@ -218,16 +218,16 @@ await client.addRoot(Root(
 
 // List roots
 final roots = await client.listRoots();
-stderr.writeln('Configured roots: ${roots.map((r) => r.name).join(', ')}');
+log.debug('Configured roots: ${roots.map((r) => r.name).join(', ')}');
 
 // Remove a root
 await client.removeRoot('file:///path/to/allowed/directory');
 
 // Register for roots list changes
 client.onRootsListChanged(() {
-  stderr.writeln('Roots list has changed');
+  log.debug('Roots list has changed');
   client.listRoots().then((roots) {
-    stderr.writeln('New roots: ${roots.map((r) => r.name).join(', ')}');
+    log.debug('New roots: ${roots.map((r) => r.name).join(', ')}');
   });
 });
 ```
@@ -261,14 +261,14 @@ final request = CreateMessageRequest(
 final result = await client.createMessage(request);
 
 // Process the result
-stderr.writeln('Model used: ${result.model}');
-stderr.writeln('Response: ${(result.content as TextContent).text}');
+log.debug('Model used: ${result.model}');
+log.debug('Response: ${(result.content as TextContent).text}');
 
 // Register for sampling responses
 client.onSamplingResponse((requestId, result) {
-  stderr.writeln('Sampling response for request $requestId:');
-  stderr.writeln('Model: ${result.model}');
-  stderr.writeln('Content: ${(result.content as TextContent).text}');
+  log.debug('Sampling response for request $requestId:');
+  log.debug('Model: ${result.model}');
+  log.debug('Content: ${(result.content as TextContent).text}');
 });
 ```
 
@@ -279,10 +279,10 @@ Monitor the health status of connected MCP servers:
 ```dart
 // Get server health status
 final health = await client.healthCheck();
-stderr.writeln('Server running: ${health.isRunning}');
-stderr.writeln('Connected sessions: ${health.connectedSessions}');
-stderr.writeln('Registered tools: ${health.registeredTools}');
-stderr.writeln('Uptime: ${health.uptime.inMinutes} minutes');
+log.debug('Server running: ${health.isRunning}');
+log.debug('Connected sessions: ${health.connectedSessions}');
+log.debug('Registered tools: ${health.registeredTools}');
+log.debug('Uptime: ${health.uptime.inMinutes} minutes');
 ```
 
 ## Transport Layers
@@ -332,34 +332,34 @@ Register for server-side notifications:
 ```dart
 // Handle tools list changes
 client.onToolsListChanged(() {
-stderr.writeln('Tools list has changed');
-client.listTools().then((tools) {
-stderr.writeln('New tools: ${tools.map((t) => t.name).join(', ')}');
-});
+  log.debug('Tools list has changed');
+  client.listTools().then((tools) {
+    log.debug('New tools: ${tools.map((t) => t.name).join(', ')}');
+  });
 });
 
 // Handle resources list changes
 client.onResourcesListChanged(() {
-stderr.writeln('Resources list has changed');
-client.listResources().then((resources) {
-stderr.writeln('New resources: ${resources.map((r) => r.name).join(', ')}');
-});
+  log.debug('Resources list has changed');
+  client.listResources().then((resources) {
+    log.debug('New resources: ${resources.map((r) => r.name).join(', ')}');
+  });
 });
 
 // Handle prompts list changes
 client.onPromptsListChanged(() {
-stderr.writeln('Prompts list has changed');
-client.listPrompts().then((prompts) {
-stderr.writeln('New prompts: ${prompts.map((p) => p.name).join(', ')}');
-});
+  log.debug('Prompts list has changed');
+  client.listPrompts().then((prompts) {
+    log.debug('New prompts: ${prompts.map((p) => p.name).join(', ')}');
+  });
 });
 
 // Handle server logging
 client.onLogging((level, message, logger, data) {
-stderr.writeln('Server log [$level]${logger != null ? " [$logger]" : ""}: $message');
-if (data != null) {
-stderr.writeln('Additional data: $data');
-}
+  log.debug('Server log [$level]${logger != null ? " [$logger]" : ""}: $message');
+  if (data != null) {
+    log.debug('Additional data: $data');
+  }
 });
 ```
 
@@ -367,11 +367,11 @@ stderr.writeln('Additional data: $data');
 
 ```dart
 try {
-await client.callTool('unknown-tool', {});
+  await client.callTool('unknown-tool', {});
 } on McpError catch (e) {
-stderr.writeln('MCP error (${e.code}): ${e.message}');
+  log.debug('MCP error (${e.code}): ${e.message}');
 } catch (e) {
-stderr.writeln('Unexpected error: $e');
+  log.debug('Unexpected error: $e');
 }
 ```
 

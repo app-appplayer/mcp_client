@@ -1,10 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:mcp_client/logger.dart';
 import 'package:mcp_client/mcp_client.dart';
-import 'package:mcp_client/src/client/client.dart';
-import 'package:mcp_client/src/models/models.dart';
 import 'package:test/test.dart';
 
 import 'mock_transport.dart';
