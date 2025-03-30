@@ -12,12 +12,17 @@ enum LogLevel {
 final log = Logger.instance;
 
 class Logger {
-  static final Logger _instance = Logger._internal();
+  static final Map<String, Logger> _loggers = {};
+
+  static final Logger _instance = Logger._internal('mcp_llm');
   static Logger get instance => _instance;
 
-  LogLevel _currentLevel = LogLevel.none;
+  final String name;
+
+  LogLevel _level = LogLevel.none;
   bool _includeTimestamp = true;
   bool _useColor = true;
+  IOSink _output = stderr;
 
   static const String _resetColor = '\u001b[0m';
   static const String _redColor = '\u001b[31m';
@@ -26,40 +31,59 @@ class Logger {
   static const String _cyanColor = '\u001b[36m';
   static const String _grayColor = '\u001b[90m';
 
-  Logger._internal();
+  static Logger getLogger(String name) {
+    return _loggers.putIfAbsent(name, () => Logger._internal(name));
+  }
+
+  Logger._internal(this.name) {
+    _loggers[name] = this;
+  }
+
+  static void setAllLevels(LogLevel level) {
+    for (final logger in _loggers.values) {
+      logger._level = level;
+    }
+  }
+
+  static void setLevelByPattern(String pattern, LogLevel level) {
+    for (final entry in _loggers.entries) {
+      if (entry.key.startsWith(pattern)) {
+        entry.value._level = level;
+      }
+    }
+  }
 
   void configure({
     LogLevel? level,
     bool? includeTimestamp,
     bool? useColor,
+    IOSink? output,
   }) {
-    if (level != null) _currentLevel = level;
+    if (level != null) {
+      _level = level;
+
+      setAllLevels(level);
+    }
     if (includeTimestamp != null) _includeTimestamp = includeTimestamp;
     if (useColor != null) _useColor = useColor;
+    if (output != null) _output = output;
   }
 
   void setLevel(LogLevel level) {
-    _currentLevel = level;
-  }
-
-  void setIncludeTimestamp(bool include) {
-    _includeTimestamp = include;
-  }
-
-  void setUseColor(bool use) {
-    _useColor = use;
+    _level = level;
   }
 
   void log(LogLevel level, String message) {
-    if (level.index <= _currentLevel.index) {
+    if (level.index <= _level.index) {
       final timestamp = _includeTimestamp ? '[${DateTime.now()}] ' : '';
       final levelName = level.name.toUpperCase();
       final colorCode = _getColorForLevel(level);
+      final namePrefix = name.isNotEmpty ? '[$name] ' : '';
 
       if (_useColor) {
-        stderr.writeln('$timestamp$colorCode[$levelName]$_resetColor $message');
+        _output.writeln('$timestamp$colorCode[$levelName]$_resetColor $namePrefix$message');
       } else {
-        stderr.writeln('$timestamp[$levelName] $message');
+        _output.writeln('$timestamp[$levelName] $namePrefix$message');
       }
     }
   }

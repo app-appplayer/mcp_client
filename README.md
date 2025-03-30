@@ -43,7 +43,7 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  mcp_client: ^0.1.2
+  mcp_client: ^0.1.3
 ```
 
 Or install via command line:

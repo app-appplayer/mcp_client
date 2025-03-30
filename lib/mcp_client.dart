@@ -5,6 +5,7 @@ export 'src/models/models.dart';
 export 'src/client/client.dart';
 export 'src/transport/transport.dart';
 
+typedef MCPClient = McpClient;
 /// Main plugin class for MCP Client implementation
 class McpClient {
   /// Create a new MCP client with the specified configuration
@@ -53,11 +54,11 @@ class McpClient {
   }
 
   /// Create an SSE transport for the client
-  static SseClientTransport createSseTransport({
+  static Future<SseClientTransport> createSseTransport({
     required String serverUrl,
     Map<String, String>? headers,
   }) {
-    return SseClientTransport(
+    return SseClientTransport.create(
       serverUrl: serverUrl,
       headers: headers,
     );

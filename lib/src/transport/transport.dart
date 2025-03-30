@@ -224,64 +224,111 @@ class SseClientTransport implements ClientTransport {
   final Map<String, String>? headers;
   final _messageController = StreamController<dynamic>.broadcast();
   final _closeCompleter = Completer<void>();
-  final _eventSource = EventSource();
+  final EventSource _eventSource = EventSource();
   String? _messageEndpoint;
+  StreamSubscription? _subscription;
 
-  SseClientTransport({
+  // Private constructor
+  SseClientTransport._internal({
     required this.serverUrl,
     this.headers,
-  }) {
-    _initialize();
-  }
+  });
 
-  void _initialize() async {
+  // Factory method for creation
+  static Future<SseClientTransport> create({
+    required String serverUrl,
+    Map<String, String>? headers,
+  }) async {
+    final transport = SseClientTransport._internal(
+      serverUrl: serverUrl,
+      headers: headers,
+    );
+
     try {
-      await _eventSource.connect(
-        serverUrl,
-        headers: headers,
-        onOpen: _handleOpen,
-        onMessage: _handleServerMessage,
-        onError: _handleError,
+      // Set up event handlers
+      final endpointCompleter = Completer<String>();
+
+      await transport._eventSource.connect(
+          serverUrl,
+          headers: headers,
+          onOpen: (endpoint) {
+            if (!endpointCompleter.isCompleted && endpoint != null) {
+              endpointCompleter.complete(endpoint);
+            }
+          },
+          onMessage: (data) {
+            // This is crucial - forward messages to the controller
+            if (data is Map && data.containsKey('jsonrpc') &&
+                data.containsKey('id') && !transport._messageController.isClosed) {
+              log.debug('[MCP Client] Forwarding JSON-RPC response: $data');
+              transport._messageController.add(data);
+            } else if (!transport._messageController.isClosed) {
+              transport._messageController.add(data);
+            }
+          },
+          onError: (e) {
+            log.debug('[MCP Client] SSE error: $e');
+            if (!endpointCompleter.isCompleted) {
+              endpointCompleter.completeError(e);
+            }
+            transport._handleError(e);
+          }
       );
+
+      // Wait for endpoint
+      final endpointPath = await endpointCompleter.future.timeout(
+          Duration(seconds: 10),
+          onTimeout: () => throw McpError('Timed out waiting for endpoint')
+      );
+
+      // Set up message endpoint
+      final baseUrl = Uri.parse(serverUrl);
+      transport._messageEndpoint = transport._constructEndpointUrl(baseUrl, endpointPath);
+      log.debug('[MCP Client] Transport ready with endpoint: ${transport._messageEndpoint}');
+
+      return transport;
     } catch (e) {
-      _handleTransportError(e);
+      transport.close();
+      throw McpError('Failed to establish SSE connection: $e');
     }
   }
 
-  void _handleOpen(String? endpointUrl) {
-    log.debug('[MCP Client] SSE connection opened');
-    _messageEndpoint = endpointUrl;
-  }
 
-  void _handleServerMessage(dynamic data) {
+  // Helper method to construct endpoint URL
+  String _constructEndpointUrl(Uri baseUrl, String endpointPath) {
     try {
-      log.debug('[MCP Client] Received SSE message: $data');
-      final jsonData = jsonDecode(data);
-      _messageController.add(jsonData);
+      final Uri endpointUri;
+      if (endpointPath.contains('?')) {
+        final parts = endpointPath.split('?');
+        endpointUri = Uri(
+            path: parts[0],
+            query: parts.length > 1 ? parts[1] : null
+        );
+      } else {
+        endpointUri = Uri(path: endpointPath);
+      }
+
+      return Uri(
+          scheme: baseUrl.scheme,
+          host: baseUrl.host,
+          port: baseUrl.port,
+          path: endpointUri.path,
+          query: endpointUri.query
+      ).toString();
     } catch (e) {
-      log.debug('[MCP Client] Error parsing SSE message: $e');
+      log.debug('[MCP Client] Error parsing endpoint URL: $e');
+      // Fallback to simple concatenation
+      return '${baseUrl.origin}$endpointPath';
     }
   }
 
   void _handleError(dynamic error) {
-    log.debug('[MCP Client] SSE error: $error');
-    _handleTransportError(error);
-  }
-
-  void _handleTransportError(dynamic error) {
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.completeError(error);
     }
-    _cleanup();
   }
 
-  void _cleanup() {
-    _eventSource.close();
-    if (!_messageController.isClosed) {
-      _messageController.close();
-    }
-  }
-
+  // Standard interface methods
   @override
   Stream<dynamic> get onMessage => _messageController.stream;
 
@@ -302,6 +349,7 @@ class SseClientTransport implements ClientTransport {
       final client = HttpClient();
       final request = await client.postUrl(url);
 
+      // Set headers
       request.headers.contentType = ContentType.json;
       if (headers != null) {
         headers!.forEach((name, value) {
@@ -309,20 +357,26 @@ class SseClientTransport implements ClientTransport {
         });
       }
 
+      // Send the request
       request.write(jsonMessage);
       final response = await request.close();
 
-      if (response.statusCode != 200) {
+      // Just check for successful delivery
+      if (response.statusCode == 200) {
+        final responseBody = await response.transform(utf8.decoder).join();
+        log.debug('[MCP Client] Message delivery confirmation: $responseBody');
+        // Don't forward this to message controller, actual response comes via SSE
+      } else {
         final responseBody = await response.transform(utf8.decoder).join();
         log.debug('[MCP Client] Error response: $responseBody');
         throw McpError('Error sending message: ${response.statusCode}');
       }
 
+      // Close the HTTP client
       client.close();
       log.debug('[MCP Client] Message sent successfully');
     } catch (e) {
       log.debug('[MCP Client] Error sending message: $e');
-      log.debug('[MCP Client] Original message: $message');
       rethrow;
     }
   }
@@ -330,7 +384,11 @@ class SseClientTransport implements ClientTransport {
   @override
   void close() {
     log.debug('[MCP Client] Closing SseClientTransport');
-    _cleanup();
+    _subscription?.cancel();
+    _eventSource.close();
+    if (!_messageController.isClosed) {
+      _messageController.close();
+    }
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.complete();
     }
@@ -347,6 +405,7 @@ class EventSource {
   bool _isConnected = false;
 
   bool get isConnected => _isConnected;
+  HttpClientResponse? get response => _response; // Added getter to access response
 
   Future<void> connect(
       String url, {
@@ -355,11 +414,13 @@ class EventSource {
         Function(dynamic)? onMessage,
         Function(dynamic)? onError,
       }) async {
+    log.debug('[MCP Client] EventSource connecting');
     if (_isConnected) {
       throw McpError('EventSource is already connected');
     }
 
     try {
+      // Initialize connection
       _client = HttpClient();
       _request = await _client!.getUrl(Uri.parse(url));
 
@@ -380,63 +441,84 @@ class EventSource {
       }
 
       _isConnected = true;
+      log.debug('[MCP Client] EventSource connection established');
 
-      // Process the 'endpoint' event first
-      String? messageEndpoint;
-      await for (final chunk in _response!.transform(utf8.decoder)) {
-        _buffer.write(chunk);
-        final events = _processBuffer();
-
-        for (final event in events) {
-          if (event.event == 'endpoint' && event.data != null) {
-            final baseUrl = Uri.parse(url);
-            final endpointPath = event.data;
-            final endpointUrl = Uri(
-              scheme: baseUrl.scheme,
-              host: baseUrl.host,
-              port: baseUrl.port,
-              path: endpointPath,
-            ).toString();
-
-            messageEndpoint = endpointUrl;
-            if (onOpen != null) {
-              onOpen(messageEndpoint);
-            }
-            break;
-          }
-        }
-
-        if (messageEndpoint != null) {
-          break;
-        }
-      }
-
-      // Continue processing events
+      // Set up subscription to process events
       _subscription = _response!.transform(utf8.decoder).listen(
-            (chunk) {
-          _buffer.write(chunk);
-          final events = _processBuffer();
+              (chunk) {
+            // Log raw data for debugging
+            log.debug('[MCP Client] Raw SSE data: $chunk');
+            _buffer.write(chunk);
 
-          for (final event in events) {
-            if (event.event == 'message' && onMessage != null) {
+            // Process all events in buffer
+            final content = _buffer.toString();
+
+            // Simple check for JSON-RPC responses
+            if (content.contains('"jsonrpc":"2.0"') || content.contains('"jsonrpc": "2.0"')) {
+              log.debug('[MCP Client] Detected JSON-RPC data in SSE stream');
+
+              try {
+                // Try to extract JSON objects from the stream
+                final jsonStart = content.indexOf('{');
+                final jsonEnd = content.lastIndexOf('}') + 1;
+
+                if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                  final jsonStr = content.substring(jsonStart, jsonEnd);
+                  log.debug('[MCP Client] Extracted JSON: $jsonStr');
+
+                  try {
+                    final jsonData = jsonDecode(jsonStr);
+                    log.debug('[MCP Client] Parsed JSON-RPC data: $jsonData');
+
+                    // Clear the processed part from buffer
+                    if (jsonEnd < content.length) {
+                      _buffer.clear();
+                      _buffer.write(content.substring(jsonEnd));
+                    } else {
+                      _buffer.clear();
+                    }
+
+                    // Forward to message handler
+                    if (onMessage != null) {
+                      onMessage(jsonData);
+                    }
+                    return; // Processed JSON data
+                  } catch (e) {
+                    log.debug('[MCP Client] JSON parse error: $e');
+                  }
+                }
+              } catch (e) {
+                log.debug('[MCP Client] Error extracting JSON: $e');
+              }
+            }
+
+            // If no JSON-RPC data found, try regular SSE event processing
+            final event = _processBuffer();
+
+            if (event.event == 'endpoint' && event.data != null && onOpen != null) {
+              // Handle endpoint event
+              onOpen(event.data);
+            } else if (event.data != null && onMessage != null) {
               onMessage(event.data);
             }
+          },
+          onError: (e) {
+            log.debug('[MCP Client] EventSource error: $e');
+            _isConnected = false;
+            if (onError != null) {
+              onError(e);
+            }
+          },
+          onDone: () {
+            log.debug('[MCP Client] EventSource stream closed');
+            _isConnected = false;
+            if (onError != null) {
+              onError('Connection closed');
+            }
           }
-        },
-        onError: (error) {
-          _isConnected = false;
-          if (onError != null) {
-            onError(error);
-          }
-        },
-        onDone: () {
-          _isConnected = false;
-          if (onError != null) {
-            onError('Connection closed');
-          }
-        },
       );
     } catch (e) {
+      log.debug('[MCP Client] EventSource connection error: $e');
       _isConnected = false;
       if (onError != null) {
         onError(e);
@@ -445,47 +527,42 @@ class EventSource {
     }
   }
 
-  List<_SseEvent> _processBuffer() {
-    final events = <_SseEvent>[];
+  // Process the buffer to find SSE events
+  _SseEvent _processBuffer() {
     final lines = _buffer.toString().split('\n');
+    log.debug('[MCP Client] _processBuffer lines count: ${lines.length}');
 
-    int i = 0;
-    while (i < lines.length) {
-      String event = 'message';
-      String? data;
+    String currentEvent = '';
+    String? currentData;
+    bool isCheckedType = false;
+    bool isCheckedData = false;
 
-      // Process event
-      while (i < lines.length && lines[i].isNotEmpty) {
-        final line = lines[i];
-        if (line.startsWith('event:')) {
-          event = line.substring(6).trim();
-        } else if (line.startsWith('data:')) {
-          data = line.substring(5).trim();
-        }
-        i++;
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
+
+      if (line.startsWith('event:') && !isCheckedType) {
+        currentEvent = line.substring(6).trim();
+        isCheckedType = true;
+        log.debug('[MCP Client] Found event type: $currentEvent');
+      }
+      else if (line.startsWith('data:') && !isCheckedData) {
+        currentData = line.substring(5).trim();
+        isCheckedData = true;
+        log.debug('[MCP Client] Found event data: $currentData');
       }
 
-      if (data != null) {
-        events.add(_SseEvent(event, data));
-      }
-
-      // Skip empty lines
-      while (i < lines.length && lines[i].isEmpty) {
-        i++;
+      if(isCheckedType && isCheckedData) {
+        log.debug('[MCP Client] Creating event: $currentEvent, data: $currentData');
+        return _SseEvent(currentEvent, currentData);
       }
     }
 
-    // Clear processed lines
-    if (lines.length > 1) {
-      final remaining = lines.last.isEmpty ? '' : lines.last;
-      _buffer.clear();
-      _buffer.write(remaining);
-    }
-
-    return events;
+    // Return empty event if no complete event found
+    return _SseEvent('', null);
   }
 
   void close() {
+    log.debug('[MCP Client] Closing EventSource');
     _subscription?.cancel();
     _client?.close();
     _isConnected = false;

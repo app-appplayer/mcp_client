@@ -120,12 +120,14 @@ class ResourceContent extends Content {
   final String? text;
   final String? blob;
   final String? mimeType;
+  final Map<String, dynamic>? uriTemplate;
 
   ResourceContent({
     required this.uri,
     this.text,
     this.blob,
     this.mimeType,
+    this.uriTemplate,
   }) : super(MCPContentType.resource);
 
   factory ResourceContent.fromJson(Map<String, dynamic> json) {
@@ -134,6 +136,7 @@ class ResourceContent extends Content {
       text: json['text'] as String?,
       blob: json['blob'] as String?,
       mimeType: json['mimeType'] as String?,
+      uriTemplate: json['uriTemplate'] as Map<String, dynamic>?,
     );
   }
 
@@ -230,7 +233,7 @@ class Resource {
   final String name;
   final String description;
   final String? mimeType;
-  final String? uriTemplate;
+  final Map<String, dynamic>? uriTemplate;
 
   Resource({
     required this.uri,
@@ -264,7 +267,7 @@ class Resource {
       name: json['name'] as String,
       description: (json['description'] ?? '') as String,
       mimeType: json['mimeType'] as String?,
-      uriTemplate: json['uriTemplate'] as String?,
+      uriTemplate: json['uriTemplate'] as Map<String, dynamic>?,
     );
   }
 }

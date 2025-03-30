@@ -1,3 +1,22 @@
+## 0.1.3
+
+* Fixed
+    * SSE Transport Connection Issues: Fixed critical issue with Server-Sent Events (SSE) connection where the client could not properly process JSON-RPC responses from the server.
+      * Improved event stream processing to correctly parse JSON-RPC messages
+      * Fixed handling of the endpoint event to establish the message channel
+      * Enhanced buffer management for fragmented SSE event data
+    * JSON-RPC Message Flow: Corrected the bidirectional communication flow between client and server:
+      * Client requests via HTTP POST to message endpoint now properly receive responses
+      * Fixed timeout issues by correctly handling asynchronous SSE responses
+* Improved
+    * Error Handling: Enhanced error reporting and recovery for connection issues
+    * Logging: Added more detailed diagnostic logging for easier troubleshooting
+    * Stability: More robust message endpoint URL construction and session handling
+* Technical Notes
+    * Updated SseClientTransport implementation to maintain persistent connections
+    * Fixed JSON response type handling for resource templates
+    * Improved session management and reconnection logic
+
 ## 0.1.2
 
 * New Features
