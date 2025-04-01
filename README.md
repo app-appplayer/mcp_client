@@ -80,7 +80,7 @@ void main() async {
   
   // List available tools on the server
   final tools = await client.listTools();
-  log.debug('Available tools: ${tools.map((t) => t.name).join(', ')}');
+  _logger.debug('Available tools: ${tools.map((t) => t.name).join(', ')}');
   
   // Call a tool
   final result = await client.callTool('calculator', {
@@ -88,7 +88,7 @@ void main() async {
     'a': 5,
     'b': 3,
   });
-  log.debug('Result: ${(result.content.first as TextContent).text}');
+  _logger.debug('Result: ${(result.content.first as TextContent).text}');
   
   // Disconnect when done
   client.disconnect();
@@ -120,24 +120,24 @@ Resources provide access to data from MCP servers. They're similar to GET endpoi
 ```dart
 // List available resources
 final resources = await client.listResources();
-log.debug('Available resources: ${resources.map((r) => r.name).join(', ')}');
+_logger.debug('Available resources: ${resources.map((r) => r.name).join(', ')}');
 
 // Read a resource
 final resourceResult = await client.readResource('file:///path/to/file.txt');
 final content = resourceResult.contents.first;
-log.debug('Resource content: ${content.text}');
+_logger.debug('Resource content: ${content.text}');
 
 // Get a resource using a template
 final templateResult = await client.getResourceWithTemplate('file:///{path}', {
   'path': 'example.txt'
 });
-log.debug('Template result: ${templateResult.contents.first.text}');
+_logger.debug('Template result: ${templateResult.contents.first.text}');
 
 // Subscribe to resource updates
 await client.subscribeResource('file:///path/to/file.txt');
 client.onResourceContentUpdated((uri, content) {
-  log.debug('Resource updated: $uri');
-  log.debug('New content: ${content.text}');
+  _logger.debug('Resource updated: $uri');
+  _logger.debug('New content: ${content.text}');
 });
 
 // Unsubscribe when no longer needed
@@ -151,7 +151,7 @@ Tools allow you to execute functionality exposed by MCP servers:
 ```dart
 // List available tools
 final tools = await client.listTools();
-log.debug('Available tools: ${tools.map((t) => t.name).join(', ')}');
+_logger.debug('Available tools: ${tools.map((t) => t.name).join(', ')}');
 
 // Call a tool
 final result = await client.callTool('search-web', {
@@ -167,13 +167,13 @@ final operationId = trackingResult.operationId;
 
 // Register progress handler
 client.onProgress((requestId, progress, message) {
-  log.debug('Operation $requestId: $progress% - $message');
+  _logger.debug('Operation $requestId: $progress% - $message');
 });
 
 // Process the result
 final content = result.content.first;
 if (content is TextContent) {
-  log.debug('Search results: ${content.text}');
+  _logger.debug('Search results: ${content.text}');
 }
 
 // Cancel an operation if needed
@@ -187,7 +187,7 @@ Prompts are reusable templates provided by servers that help with common interac
 ```dart
 // List available prompts
 final prompts = await client.listPrompts();
-log.debug('Available prompts: ${prompts.map((p) => p.name).join(', ')}');
+_logger.debug('Available prompts: ${prompts.map((p) => p.name).join(', ')}');
 
 // Get a prompt result
 final promptResult = await client.getPrompt('analyze-code', {
@@ -199,7 +199,7 @@ final promptResult = await client.getPrompt('analyze-code', {
 for (final message in promptResult.messages) {
   final content = message.content;
   if (content is TextContent) {
-    log.debug('${message.role}: ${content.text}');
+    _logger.debug('${message.role}: ${content.text}');
   }
 }
 ```
@@ -218,16 +218,16 @@ await client.addRoot(Root(
 
 // List roots
 final roots = await client.listRoots();
-log.debug('Configured roots: ${roots.map((r) => r.name).join(', ')}');
+_logger.debug('Configured roots: ${roots.map((r) => r.name).join(', ')}');
 
 // Remove a root
 await client.removeRoot('file:///path/to/allowed/directory');
 
 // Register for roots list changes
 client.onRootsListChanged(() {
-  log.debug('Roots list has changed');
+  _logger.debug('Roots list has changed');
   client.listRoots().then((roots) {
-    log.debug('New roots: ${roots.map((r) => r.name).join(', ')}');
+    _logger.debug('New roots: ${roots.map((r) => r.name).join(', ')}');
   });
 });
 ```
@@ -261,14 +261,14 @@ final request = CreateMessageRequest(
 final result = await client.createMessage(request);
 
 // Process the result
-log.debug('Model used: ${result.model}');
-log.debug('Response: ${(result.content as TextContent).text}');
+_logger.debug('Model used: ${result.model}');
+_logger.debug('Response: ${(result.content as TextContent).text}');
 
 // Register for sampling responses
 client.onSamplingResponse((requestId, result) {
-  log.debug('Sampling response for request $requestId:');
-  log.debug('Model: ${result.model}');
-  log.debug('Content: ${(result.content as TextContent).text}');
+  _logger.debug('Sampling response for request $requestId:');
+  _logger.debug('Model: ${result.model}');
+  _logger.debug('Content: ${(result.content as TextContent).text}');
 });
 ```
 
@@ -279,10 +279,10 @@ Monitor the health status of connected MCP servers:
 ```dart
 // Get server health status
 final health = await client.healthCheck();
-log.debug('Server running: ${health.isRunning}');
-log.debug('Connected sessions: ${health.connectedSessions}');
-log.debug('Registered tools: ${health.registeredTools}');
-log.debug('Uptime: ${health.uptime.inMinutes} minutes');
+_logger.debug('Server running: ${health.isRunning}');
+_logger.debug('Connected sessions: ${health.connectedSessions}');
+_logger.debug('Registered tools: ${health.registeredTools}');
+_logger.debug('Uptime: ${health.uptime.inMinutes} minutes');
 ```
 
 ## Transport Layers
@@ -313,6 +313,25 @@ final transport = McpClient.createSseTransport(
 await client.connect(transport);
 ```
 
+## Logging
+
+The package includes a built-in logging utility:
+
+```dart
+/// Logging
+final Logger _logger = Logger.getLogger('mcp_client.test');
+_logger.setLevel(LogLevel.debug);
+
+// Configure logging
+_logger.configure(level: LogLevel.debug, includeTimestamp: true, useColor: true);
+
+// Log messages at different levels
+_logger.debug('Debugging information');
+_logger.info('Important information');
+_logger.warning('Warning message');
+_logger.error('Error message');
+```
+
 ## MCP Primitives
 
 The MCP protocol defines three core primitives that clients can interact with:
@@ -332,33 +351,33 @@ Register for server-side notifications:
 ```dart
 // Handle tools list changes
 client.onToolsListChanged(() {
-  log.debug('Tools list has changed');
+  _logger.debug('Tools list has changed');
   client.listTools().then((tools) {
-    log.debug('New tools: ${tools.map((t) => t.name).join(', ')}');
+    _logger.debug('New tools: ${tools.map((t) => t.name).join(', ')}');
   });
 });
 
 // Handle resources list changes
 client.onResourcesListChanged(() {
-  log.debug('Resources list has changed');
+  _logger.debug('Resources list has changed');
   client.listResources().then((resources) {
-    log.debug('New resources: ${resources.map((r) => r.name).join(', ')}');
+    _logger.debug('New resources: ${resources.map((r) => r.name).join(', ')}');
   });
 });
 
 // Handle prompts list changes
 client.onPromptsListChanged(() {
-  log.debug('Prompts list has changed');
+  _logger.debug('Prompts list has changed');
   client.listPrompts().then((prompts) {
-    log.debug('New prompts: ${prompts.map((p) => p.name).join(', ')}');
+    _logger.debug('New prompts: ${prompts.map((p) => p.name).join(', ')}');
   });
 });
 
 // Handle server logging
 client.onLogging((level, message, logger, data) {
-  log.debug('Server log [$level]${logger != null ? " [$logger]" : ""}: $message');
+  _logger.debug('Server log [$level]${logger != null ? " [$logger]" : ""}: $message');
   if (data != null) {
-    log.debug('Additional data: $data');
+    _logger.debug('Additional data: $data');
   }
 });
 ```
@@ -369,9 +388,9 @@ client.onLogging((level, message, logger, data) {
 try {
   await client.callTool('unknown-tool', {});
 } on McpError catch (e) {
-  log.debug('MCP error (${e.code}): ${e.message}');
+  _logger.debug('MCP error (${e.code}): ${e.message}');
 } catch (e) {
-  log.debug('Unexpected error: $e');
+  _logger.debug('Unexpected error: $e');
 }
 ```
 

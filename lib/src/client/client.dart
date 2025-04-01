@@ -5,6 +5,8 @@ import '../../logger.dart';
 import '../models/models.dart';
 import '../transport/transport.dart';
 
+final Logger _logger = Logger.getLogger('mcp_client.client');
+
 /// Main MCP Client class that handles all client-side protocol operations
 class Client {
   /// Name of the MCP client
@@ -84,7 +86,7 @@ class Client {
       try {
         await _processMessage(message);
       } catch (e) {
-        log.debug('[MCP] Error processing message: $e');
+        _logger.debug('Error processing message: $e');
       }
     });
 
@@ -128,7 +130,7 @@ class Client {
           try {
             await _processMessage(message);
           } catch (e) {
-            log.debug('[MCP] Error processing message: $e');
+            _logger.debug('Error processing message: $e');
           }
         });
 
@@ -151,7 +153,7 @@ class Client {
           throw McpError('Failed to connect after $maxRetries attempts: $e');
         }
 
-        log.debug('Connection attempt $attempts failed: $e. Retrying in ${delay.inSeconds} seconds...');
+        _logger.debug('Connection attempt $attempts failed: $e. Retrying in ${delay.inSeconds} seconds...');
         await Future.delayed(delay);
       }
     }
@@ -192,12 +194,12 @@ class Client {
     _sendNotification('initialized', {});
 
     _initialized = true;
-    log.debug('[MCP] Initialization complete');
+    _logger.debug('Initialization complete');
   }
 
   /// Validate protocol version compatibility
   void _validateProtocolVersion(String serverProtoVersion) {
-    log.warning('[MCP] Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion');
+    _logger.warning('Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion');
 
     // Check if server protocol version is at least compatible
     try {
@@ -205,11 +207,11 @@ class Client {
       final serverDate = DateTime.parse(serverProtoVersion);
 
       if (serverDate.isBefore(clientDate)) {
-        log.warning('[MCP] Server protocol version ($serverProtoVersion) is older than client protocol version ($protocolVersion)');
+        _logger.warning('Server protocol version ($serverProtoVersion) is older than client protocol version ($protocolVersion)');
       }
     } catch (e) {
       // Date parsing failed, fallback to string comparison
-      log.warning('[MCP] Unable to parse protocol versions as dates for comparison');
+      _logger.warning('Unable to parse protocol versions as dates for comparison');
     }
   }
 
@@ -656,7 +658,7 @@ class Client {
       );
       _messageController.add(message);
     } catch (e) {
-      log.debug('[MCP] Error parsing message: $e');
+      _logger.debug('Error parsing message: $e');
     }
   }
 
@@ -667,7 +669,7 @@ class Client {
     } else if (message.isNotification) {
       _handleNotification(message);
     } else {
-      log.debug('[MCP] Ignoring unexpected message type: ${message.toJson()}');
+      _logger.debug('Ignoring unexpected message type: ${message.toJson()}');
     }
   }
 
@@ -675,7 +677,7 @@ class Client {
   void _handleResponse(JsonRpcMessage response) {
     final id = response.id;
     if (id == null || id is! int || !_requestCompleters.containsKey(id)) {
-      log.debug('[MCP] Received response with unknown id: $id');
+      _logger.debug('Received response with unknown id: $id');
       return;
     }
 
@@ -700,10 +702,10 @@ class Client {
       try {
         handler(params);
       } catch (e) {
-        log.debug('[MCP] Error in notification handler: $e');
+        _logger.debug('Error in notification handler: $e');
       }
     } else {
-      log.debug('[MCP] No handler for notification: $method');
+      _logger.debug('No handler for notification: $method');
     }
   }
 

@@ -6,6 +6,8 @@ import 'dart:io';
 import '../../logger.dart';
 import '../models/models.dart';
 
+final Logger _logger = Logger.getLogger('mcp_client.transport');
+
 /// Abstract base class for client transport implementations
 abstract class ClientTransport {
   /// Stream of incoming messages
@@ -43,7 +45,7 @@ class StdioClientTransport implements ClientTransport {
     String? workingDirectory,
     Map<String, String>? environment,
   }) async {
-    log.debug('[MCP Client] Starting process: $command ${arguments.join(' ')}');
+    _logger.debug('Starting process: $command ${arguments.join(' ')}');
 
     final process = await Process.start(
       command,
@@ -56,7 +58,7 @@ class StdioClientTransport implements ClientTransport {
   }
 
   void _initialize() {
-    log.debug('[MCP Client] Initializing STDIO transport');
+    _logger.debug('Initializing STDIO transport');
 
     // Process stdout stream and handle messages
     var stdoutSubscription = _process.stdout
@@ -65,30 +67,30 @@ class StdioClientTransport implements ClientTransport {
         .where((line) => line.isNotEmpty)
         .map((line) {
       try {
-        log.debug('[MCP Client] Raw received line: $line');
+        _logger.debug('Raw received line: $line');
         final parsedMessage = jsonDecode(line);
-        log.debug('[MCP Client] Parsed message: $parsedMessage');
+        _logger.debug('Parsed message: $parsedMessage');
         return parsedMessage;
       } catch (e) {
-        log.debug('[MCP Client] JSON parsing error: $e');
-        log.debug('[MCP Client] Problematic line: $line');
+        _logger.debug('JSON parsing error: $e');
+        _logger.debug('Problematic line: $line');
         return null;
       }
     })
         .where((message) => message != null)
         .listen(
           (message) {
-            log.debug('[MCP Client] Processing message: $message');
+            _logger.debug('Processing message: $message');
         if (!_messageController.isClosed) {
           _messageController.add(message);
         }
       },
       onError: (error) {
-        log.debug('[MCP Client] Stream error: $error');
+        _logger.debug('Stream error: $error');
         _handleTransportError(error);
       },
       onDone: () {
-        log.debug('[MCP Client] stdout stream done');
+        _logger.debug('stdout stream done');
         _handleStreamClosure();
       },
       cancelOnError: false,
@@ -102,20 +104,20 @@ class StdioClientTransport implements ClientTransport {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      log.debug('[MCP Client] Server stderr: $line');
+      _logger.debug('Server stderr: $line');
     });
 
     _processSubscriptions.add(stderrSubscription);
 
     // Handle process exit
     _process.exitCode.then((exitCode) {
-      log.debug('[MCP Client] Process exited with code: $exitCode');
+      _logger.debug('Process exited with code: $exitCode');
       _handleStreamClosure();
     });
   }
 
   void _handleTransportError(dynamic error) {
-    log.debug('[MCP Client] Transport error: $error');
+    _logger.debug('Transport error: $error');
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.completeError(error);
     }
@@ -123,7 +125,7 @@ class StdioClientTransport implements ClientTransport {
   }
 
   void _handleStreamClosure() {
-    log.debug('[MCP Client] Handling stream closure');
+    _logger.debug('Handling stream closure');
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.complete();
     }
@@ -146,7 +148,7 @@ class StdioClientTransport implements ClientTransport {
       _process.kill();
     } catch (e) {
       // Process might already be terminated
-      log.debug('[MCP Client] Error killing process: $e');
+      _logger.debug('Error killing process: $e');
     }
   }
 
@@ -161,7 +163,7 @@ class StdioClientTransport implements ClientTransport {
   void send(dynamic message) {
     try {
       final jsonMessage = jsonEncode(message);
-      log.debug('[MCP Client] Queueing message: $jsonMessage');
+      _logger.debug('Queueing message: $jsonMessage');
 
       // Add message to queue
       _messageQueue.add(jsonMessage);
@@ -169,8 +171,8 @@ class StdioClientTransport implements ClientTransport {
       // Start processing queue if not already doing so
       _processMessageQueue();
     } catch (e) {
-      log.debug('[MCP Client] Error encoding message: $e');
-      log.debug('[MCP Client] Original message: $message');
+      _logger.debug('Error encoding message: $e');
+      _logger.debug('Original message: $message');
       rethrow;
     }
   }
@@ -196,16 +198,16 @@ class StdioClientTransport implements ClientTransport {
     final message = _messageQueue.removeFirst();
 
     try {
-      log.debug('[MCP Client] Sending message: $message');
+      _logger.debug('Sending message: $message');
       _process.stdin.writeln(message);
 
       // Use Timer to give stdin a chance to process
       Timer(Duration(milliseconds: 10), () {
-        log.debug('[MCP Client] Message sent successfully');
+        _logger.debug('Message sent successfully');
         _sendNextMessage();
       });
     } catch (e) {
-      log.debug('[MCP Client] Error sending message: $e');
+      _logger.debug('Error sending message: $e');
       _isSending = false;
       throw Exception('Failed to write to process stdin: $e');
     }
@@ -213,7 +215,7 @@ class StdioClientTransport implements ClientTransport {
 
   @override
   void close() {
-    log.debug('[MCP Client] Closing StdioClientTransport');
+    _logger.debug('Closing StdioClientTransport');
     _cleanup();
   }
 }
@@ -260,14 +262,14 @@ class SseClientTransport implements ClientTransport {
             // This is crucial - forward messages to the controller
             if (data is Map && data.containsKey('jsonrpc') &&
                 data.containsKey('id') && !transport._messageController.isClosed) {
-              log.debug('[MCP Client] Forwarding JSON-RPC response: $data');
+              _logger.debug('Forwarding JSON-RPC response: $data');
               transport._messageController.add(data);
             } else if (!transport._messageController.isClosed) {
               transport._messageController.add(data);
             }
           },
           onError: (e) {
-            log.debug('[MCP Client] SSE error: $e');
+            _logger.debug('SSE error: $e');
             if (!endpointCompleter.isCompleted) {
               endpointCompleter.completeError(e);
             }
@@ -284,7 +286,7 @@ class SseClientTransport implements ClientTransport {
       // Set up message endpoint
       final baseUrl = Uri.parse(serverUrl);
       transport._messageEndpoint = transport._constructEndpointUrl(baseUrl, endpointPath);
-      log.debug('[MCP Client] Transport ready with endpoint: ${transport._messageEndpoint}');
+      _logger.debug('Transport ready with endpoint: ${transport._messageEndpoint}');
 
       return transport;
     } catch (e) {
@@ -316,7 +318,7 @@ class SseClientTransport implements ClientTransport {
           query: endpointUri.query
       ).toString();
     } catch (e) {
-      log.debug('[MCP Client] Error parsing endpoint URL: $e');
+      _logger.debug('Error parsing endpoint URL: $e');
       // Fallback to simple concatenation
       return '${baseUrl.origin}$endpointPath';
     }
@@ -343,7 +345,7 @@ class SseClientTransport implements ClientTransport {
 
     try {
       final jsonMessage = jsonEncode(message);
-      log.debug('[MCP Client] Sending message: $jsonMessage');
+      _logger.debug('Sending message: $jsonMessage');
 
       final url = Uri.parse(_messageEndpoint!);
       final client = HttpClient();
@@ -364,26 +366,26 @@ class SseClientTransport implements ClientTransport {
       // Just check for successful delivery
       if (response.statusCode == 200) {
         final responseBody = await response.transform(utf8.decoder).join();
-        log.debug('[MCP Client] Message delivery confirmation: $responseBody');
+        _logger.debug('Message delivery confirmation: $responseBody');
         // Don't forward this to message controller, actual response comes via SSE
       } else {
         final responseBody = await response.transform(utf8.decoder).join();
-        log.debug('[MCP Client] Error response: $responseBody');
+        _logger.debug('Error response: $responseBody');
         throw McpError('Error sending message: ${response.statusCode}');
       }
 
       // Close the HTTP client
       client.close();
-      log.debug('[MCP Client] Message sent successfully');
+      _logger.debug('Message sent successfully');
     } catch (e) {
-      log.debug('[MCP Client] Error sending message: $e');
+      _logger.debug('Error sending message: $e');
       rethrow;
     }
   }
 
   @override
   void close() {
-    log.debug('[MCP Client] Closing SseClientTransport');
+    _logger.debug('Closing SseClientTransport');
     _subscription?.cancel();
     _eventSource.close();
     if (!_messageController.isClosed) {
@@ -414,7 +416,7 @@ class EventSource {
         Function(dynamic)? onMessage,
         Function(dynamic)? onError,
       }) async {
-    log.debug('[MCP Client] EventSource connecting');
+    _logger.debug('EventSource connecting');
     if (_isConnected) {
       throw McpError('EventSource is already connected');
     }
@@ -441,13 +443,13 @@ class EventSource {
       }
 
       _isConnected = true;
-      log.debug('[MCP Client] EventSource connection established');
+      _logger.debug('EventSource connection established');
 
       // Set up subscription to process events
       _subscription = _response!.transform(utf8.decoder).listen(
               (chunk) {
             // Log raw data for debugging
-            log.debug('[MCP Client] Raw SSE data: $chunk');
+            _logger.debug('Raw SSE data: $chunk');
             _buffer.write(chunk);
 
             // Process all events in buffer
@@ -455,7 +457,7 @@ class EventSource {
 
             // Simple check for JSON-RPC responses
             if (content.contains('"jsonrpc":"2.0"') || content.contains('"jsonrpc": "2.0"')) {
-              log.debug('[MCP Client] Detected JSON-RPC data in SSE stream');
+              _logger.debug('Detected JSON-RPC data in SSE stream');
 
               try {
                 // Try to extract JSON objects from the stream
@@ -464,11 +466,11 @@ class EventSource {
 
                 if (jsonStart >= 0 && jsonEnd > jsonStart) {
                   final jsonStr = content.substring(jsonStart, jsonEnd);
-                  log.debug('[MCP Client] Extracted JSON: $jsonStr');
+                  _logger.debug('Extracted JSON: $jsonStr');
 
                   try {
                     final jsonData = jsonDecode(jsonStr);
-                    log.debug('[MCP Client] Parsed JSON-RPC data: $jsonData');
+                    _logger.debug('Parsed JSON-RPC data: $jsonData');
 
                     // Clear the processed part from buffer
                     if (jsonEnd < content.length) {
@@ -484,11 +486,11 @@ class EventSource {
                     }
                     return; // Processed JSON data
                   } catch (e) {
-                    log.debug('[MCP Client] JSON parse error: $e');
+                    _logger.debug('JSON parse error: $e');
                   }
                 }
               } catch (e) {
-                log.debug('[MCP Client] Error extracting JSON: $e');
+                _logger.debug('Error extracting JSON: $e');
               }
             }
 
@@ -503,14 +505,14 @@ class EventSource {
             }
           },
           onError: (e) {
-            log.debug('[MCP Client] EventSource error: $e');
+            _logger.debug('EventSource error: $e');
             _isConnected = false;
             if (onError != null) {
               onError(e);
             }
           },
           onDone: () {
-            log.debug('[MCP Client] EventSource stream closed');
+            _logger.debug('EventSource stream closed');
             _isConnected = false;
             if (onError != null) {
               onError('Connection closed');
@@ -518,7 +520,7 @@ class EventSource {
           }
       );
     } catch (e) {
-      log.debug('[MCP Client] EventSource connection error: $e');
+      _logger.debug('EventSource connection error: $e');
       _isConnected = false;
       if (onError != null) {
         onError(e);
@@ -530,7 +532,7 @@ class EventSource {
   // Process the buffer to find SSE events
   _SseEvent _processBuffer() {
     final lines = _buffer.toString().split('\n');
-    log.debug('[MCP Client] _processBuffer lines count: ${lines.length}');
+    _logger.debug('_processBuffer lines count: ${lines.length}');
 
     String currentEvent = '';
     String? currentData;
@@ -543,16 +545,16 @@ class EventSource {
       if (line.startsWith('event:') && !isCheckedType) {
         currentEvent = line.substring(6).trim();
         isCheckedType = true;
-        log.debug('[MCP Client] Found event type: $currentEvent');
+        _logger.debug('Found event type: $currentEvent');
       }
       else if (line.startsWith('data:') && !isCheckedData) {
         currentData = line.substring(5).trim();
         isCheckedData = true;
-        log.debug('[MCP Client] Found event data: $currentData');
+        _logger.debug('Found event data: $currentData');
       }
 
       if(isCheckedType && isCheckedData) {
-        log.debug('[MCP Client] Creating event: $currentEvent, data: $currentData');
+        _logger.debug('Creating event: $currentEvent, data: $currentData');
         return _SseEvent(currentEvent, currentData);
       }
     }
@@ -562,7 +564,7 @@ class EventSource {
   }
 
   void close() {
-    log.debug('[MCP Client] Closing EventSource');
+    _logger.debug('Closing EventSource');
     _subscription?.cancel();
     _client?.close();
     _isConnected = false;

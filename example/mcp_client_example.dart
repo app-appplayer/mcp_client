@@ -1,11 +1,12 @@
 import 'dart:io';
-import 'package:mcp_client/logger.dart';
 import 'package:mcp_client/mcp_client.dart';
+
+final Logger _logger = Logger.getLogger('mcp_server_example');
 
 /// Example MCP client application that connects to a filesystem server and demonstrates key functionality
 void main() async {
   // Set up logging to use stderr instead of stdout
-  log.setLevel(LogLevel.debug);
+  _logger.setLevel(LogLevel.debug);
 
   // Create a log file for output
   final logFile = File('mcp_client_example.log');
@@ -130,7 +131,7 @@ void main() async {
 /// Log to file instead of stdout to avoid interfering with STDIO transport
 void logToFile(String message, IOSink logSink) {
   // Log to stderr (which doesn't interfere with STDIO protocol on stdin/stdout)
-  stderr.writeln(message);
+  _logger.debug(message);
 
   // Also log to file
   logSink.writeln(message);

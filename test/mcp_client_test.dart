@@ -1,19 +1,20 @@
 import 'dart:async';
 
-import 'package:mcp_client/logger.dart';
 import 'package:mcp_client/mcp_client.dart';
 import 'package:test/test.dart';
 
 import 'mock_transport.dart';
 
 void main() {
+  final Logger logger = Logger.getLogger('example');
+
   group('MCP Client Tests', () {
     late Client client;
     late MockTransport mockTransport;
 
     setUp(() {
       // Use a lower log level for tests to avoid cluttering test output
-      log.setLevel(LogLevel.error);
+      logger.setLevel(LogLevel.error);
 
       // Create client with default capabilities
       client = McpClient.createClient(
