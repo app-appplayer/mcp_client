@@ -25,6 +25,11 @@ class Logger {
   static const String _cyanColor = '\u001b[36m';
   static const String _grayColor = '\u001b[90m';
 
+  Logger(this.name, [LogLevel level = LogLevel.none]) {
+    _level = level;
+    _loggers[name] = this;
+  }
+
   static Logger getLogger(String name) {
     return _loggers.putIfAbsent(name, () => Logger._internal(name));
   }

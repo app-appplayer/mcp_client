@@ -229,6 +229,7 @@ class SseClientTransport implements ClientTransport {
   final EventSource _eventSource = EventSource();
   String? _messageEndpoint;
   StreamSubscription? _subscription;
+  bool _isClosed = false;
 
   // Private constructor
   SseClientTransport._internal({
@@ -339,6 +340,11 @@ class SseClientTransport implements ClientTransport {
 
   @override
   void send(dynamic message) async {
+    if (_isClosed) {
+      _logger.debug('Attempted to send on closed transport');
+      return;
+    }
+
     if (_messageEndpoint == null) {
       throw McpError('Cannot send message: SSE connection not fully established');
     }
@@ -385,6 +391,9 @@ class SseClientTransport implements ClientTransport {
 
   @override
   void close() {
+    if (_isClosed) return;
+    _isClosed = true;
+
     _logger.debug('Closing SseClientTransport');
     _subscription?.cancel();
     _eventSource.close();
@@ -565,8 +574,30 @@ class EventSource {
 
   void close() {
     _logger.debug('Closing EventSource');
+
+    // Cancel SSE stream listener
     _subscription?.cancel();
-    _client?.close();
+
+    // Attempt to forcibly close the underlying TCP connection
+    try {
+      _response?.detachSocket().then((socket) {
+        _logger.debug('Detached socket - destroying...');
+        socket.destroy(); // Force-close TCP connection
+      });
+    } catch (e) {
+      _logger.debug('Error detaching socket: $e');
+    }
+
+    // Abort request if it is still active
+    try {
+      _request?.abort();
+    } catch (_) {}
+
+    // Force-close the entire HttpClient including keep-alive pool
+    try {
+      _client?.close(force: true);
+    } catch (_) {}
+
     _isConnected = false;
   }
 }
