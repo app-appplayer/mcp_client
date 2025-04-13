@@ -13,7 +13,8 @@ class Logger {
   static final Map<String, Logger> _loggers = {};
   final String name;
 
-  LogLevel _level = LogLevel.none;
+  static LogLevel _defaultLevel = LogLevel.none;
+  LogLevel _level = _defaultLevel;
   bool _includeTimestamp = true;
   bool _useColor = true;
   IOSink _output = stderr;
@@ -25,8 +26,8 @@ class Logger {
   static const String _cyanColor = '\u001b[36m';
   static const String _grayColor = '\u001b[90m';
 
-  Logger(this.name, [LogLevel level = LogLevel.none]) {
-    _level = level;
+  Logger(this.name, [LogLevel? level]) {
+    _level = level ?? _defaultLevel;
     _loggers[name] = this;
   }
 
@@ -39,6 +40,7 @@ class Logger {
   }
 
   static void setAllLevels(LogLevel level) {
+    _defaultLevel = level;
     for (final logger in _loggers.values) {
       logger._level = level;
     }
