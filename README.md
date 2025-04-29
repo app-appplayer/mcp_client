@@ -1,6 +1,6 @@
 # MCP Client
 
-[![Support on Patreon](https://img.shields.io/badge/Support%20on-Patreon-orange?logo=patreon)](https://www.patreon.com/mcpdevstudio)
+[![Support on Patreon](https://c5.patreon.com/external/logo/become_a_patron_button.png)](https://www.patreon.com/mcpdevstudio)
 
 ---
 
