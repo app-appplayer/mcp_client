@@ -1,5 +1,9 @@
 # MCP Client
 
+## 🙌 Support This Project
+
+If you find this package useful, consider supporting ongoing development on Patreon.
+
 [![Support on Patreon](https://c5.patreon.com/external/logo/become_a_patron_button.png)](https://www.patreon.com/mcpdevstudio)
 
 ---
