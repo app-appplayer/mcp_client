@@ -51,7 +51,7 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  mcp_client: ^0.1.6
+  mcp_client: ^0.1.8
 ```
 
 Or install via command line:
