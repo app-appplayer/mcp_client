@@ -120,6 +120,45 @@ final client = McpClient.createClient(
   ),
 );
 ```
+### Connection State Monitoring
+
+Monitor the connection state with event streams:
+
+```dart
+// Listen for connection events
+client.onConnect.listen((serverInfo) {
+  _logger.info('Connected to ${serverInfo.name} v${serverInfo.version}');
+  _logger.info('Protocol version: ${serverInfo.protocolVersion}');
+  // Initialize your application after connection
+});
+
+// Listen for disconnection events
+client.onDisconnect.listen((reason) {
+  _logger.info('Disconnected: $reason');
+  
+  // Handle different disconnect reasons
+  switch (reason) {
+    case DisconnectReason.transportError:
+      // Attempt reconnection
+      break;
+    case DisconnectReason.serverDisconnected:
+      // Show notification to user
+      break;
+    case DisconnectReason.clientDisconnected:
+      // Normal shutdown
+      break;
+  }
+});
+
+// Listen for error events
+client.onError.listen((error) {
+  _logger.error('Error: ${error.message}');
+  // Log errors or show to user
+});
+
+// Clean up resources when done
+client.dispose();
+```
 
 ### Resources
 
@@ -405,6 +444,16 @@ try {
 ## Additional Examples
 
 Check out the [example](https://github.com/app-appplayer/mcp_client/tree/main/example) directory for a complete sample application.
+
+## Related Articles
+
+[Building a Model Context Protocol Server with Dart: Connecting to Claude Desktop](https://dev.to/mcpdevstudio/building-a-model-context-protocol-server-with-dart-connecting-to-claude-desktop-2aad)
+[Building a Model Context Protocol Client with Dart: A Comprehensive Guide](https://dev.to/mcpdevstudio/building-a-model-context-protocol-client-with-dart-a-comprehensive-guide-4fdg)
+[Integrating AI with Flutter: A Comprehensive Guide to mcp_llm
+](https://dev.to/mcpdevstudio/integrating-ai-with-flutter-a-comprehensive-guide-to-mcpllm-32f8)
+[Integrating AI with Flutter: Building Powerful Apps with LlmClient and mcp_client](https://dev.to/mcpdevstudio/integrating-ai-with-flutter-building-powerful-apps-with-llmclient-and-mcpclient-5b0i)
+[Integrating AI with Flutter: Creating AI Services with LlmServer and mcp_server](https://dev.to/mcpdevstudio/integrating-ai-with-flutter-creating-ai-services-with-llmserver-and-mcpserver-5084)
+[Integrating AI with Flutter: Connecting Multiple LLM Providers to MCP Ecosystem](https://dev.to/mcpdevstudio/integrating-ai-with-flutter-connecting-multiple-llm-providers-to-mcp-ecosystem-c3l)
 
 ## Resources
 

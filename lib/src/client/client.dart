@@ -27,6 +27,15 @@ class Client {
   /// Stream controller for handling incoming messages
   final _messageController = StreamController<JsonRpcMessage>.broadcast();
 
+  /// Stream controller for connection events
+  final _connectStreamController = StreamController<ServerInfo>.broadcast();
+
+  /// Stream controller for disconnection events
+  final _disconnectStreamController = StreamController<DisconnectReason>.broadcast();
+
+  /// Stream controller for error events
+  final _errorStreamController = StreamController<McpError>.broadcast();
+
   /// Request identifier counter
   int _requestId = 1;
 
@@ -57,6 +66,15 @@ class Client {
   /// Get the server information
   Map<String, dynamic>? get serverInfo => _serverInfo;
 
+  /// Stream of connection events
+  Stream<ServerInfo> get onConnect => _connectStreamController.stream;
+
+  /// Stream of disconnection events
+  Stream<DisconnectReason> get onDisconnect => _disconnectStreamController.stream;
+
+  /// Stream of error events
+  Stream<McpError> get onError => _errorStreamController.stream;
+
   /// Creates a new MCP client with the specified parameters
   Client({
     required this.name,
@@ -78,6 +96,11 @@ class Client {
     _transport = transport;
     _transport!.onMessage.listen(_handleMessage);
     _transport!.onClose.then((_) {
+      _disconnectStreamController.add(DisconnectReason.transportClosed);
+      _onDisconnect();
+    }).catchError((error) {
+      _errorStreamController.add(McpError('Transport error: $error'));
+      _disconnectStreamController.add(DisconnectReason.transportError);
       _onDisconnect();
     });
 
@@ -87,6 +110,7 @@ class Client {
         await _processMessage(message);
       } catch (e) {
         _logger.debug('Error processing message: $e');
+        _errorStreamController.add(McpError('Error processing message: $e'));
       }
     });
 
@@ -94,13 +118,25 @@ class Client {
     try {
       await initialize();
       _connecting = false;
+
+      // Emit connection event after successful initialization
+      if (_initialized && _serverInfo != null && _serverCapabilities != null) {
+        _connectStreamController.add(ServerInfo(
+          name: _serverInfo!['name'] as String? ?? 'Unknown',
+          version: _serverInfo!['version'] as String? ?? 'Unknown',
+          capabilities: _serverCapabilities!,
+          protocolVersion: protocolVersion,
+        ));
+      }
     } catch (e) {
       _connecting = false;
+      _errorStreamController.add(McpError('Initialization error: $e'));
       disconnect();
       rethrow;
     }
   }
 
+  /// Connect with retry mechanism
   Future<void> connectWithRetry(
       ClientTransport transport, {
         int maxRetries = 3,
@@ -122,6 +158,11 @@ class Client {
         _transport = transport;
         _transport!.onMessage.listen(_handleMessage);
         _transport!.onClose.then((_) {
+          _disconnectStreamController.add(DisconnectReason.transportClosed);
+          _onDisconnect();
+        }).catchError((error) {
+          _errorStreamController.add(McpError('Transport error: $error'));
+          _disconnectStreamController.add(DisconnectReason.transportError);
           _onDisconnect();
         });
 
@@ -131,12 +172,24 @@ class Client {
             await _processMessage(message);
           } catch (e) {
             _logger.debug('Error processing message: $e');
+            _errorStreamController.add(McpError('Error processing message: $e'));
           }
         });
 
         // Initialize connection
         await initialize();
         _connecting = false;
+
+        // Emit connection event after successful initialization
+        if (_initialized && _serverInfo != null && _serverCapabilities != null) {
+          _connectStreamController.add(ServerInfo(
+            name: _serverInfo!['name'] as String? ?? 'Unknown',
+            version: _serverInfo!['version'] as String? ?? 'Unknown',
+            capabilities: _serverCapabilities!,
+            protocolVersion: protocolVersion,
+          ));
+        }
+
         return; // Successfully connected
       } catch (e) {
         // Clean up resources on failure
@@ -150,6 +203,7 @@ class Client {
         attempts++;
         if (attempts >= maxRetries) {
           _connecting = false;
+          _errorStreamController.add(McpError('Failed to connect after $maxRetries attempts: $e'));
           throw McpError('Failed to connect after $maxRetries attempts: $e');
         }
 
@@ -631,9 +685,21 @@ class Client {
   /// Disconnect the client from its transport
   void disconnect() {
     if (_transport != null) {
+      _disconnectStreamController.add(DisconnectReason.clientDisconnected);
       _transport!.close();
       _onDisconnect();
     }
+  }
+
+  /// Dispose client resources
+  void dispose() {
+    disconnect();
+
+    // Close all stream controllers
+    _messageController.close();
+    _connectStreamController.close();
+    _disconnectStreamController.close();
+    _errorStreamController.close();
   }
 
   /// Handle transport disconnection
@@ -659,6 +725,7 @@ class Client {
       _messageController.add(message);
     } catch (e) {
       _logger.debug('Error parsing message: $e');
+      _errorStreamController.add(McpError('Error parsing message: $e'));
     }
   }
 
@@ -686,7 +753,9 @@ class Client {
     if (response.error != null) {
       final code = response.error!['code'] as int;
       final message = response.error!['message'] as String;
-      completer.completeError(McpError(message, code: code));
+      final error = McpError(message, code: code);
+      _errorStreamController.add(error);
+      completer.completeError(error);
     } else {
       completer.complete(response.result);
     }
@@ -703,6 +772,7 @@ class Client {
         handler(params);
       } catch (e) {
         _logger.debug('Error in notification handler: $e');
+        _errorStreamController.add(McpError('Error in notification handler: $e'));
       }
     } else {
       _logger.debug('No handler for notification: $method');
@@ -733,7 +803,9 @@ class Client {
       _transport!.send(request);
     } catch (e) {
       _requestCompleters.remove(id);
-      throw McpError('Failed to send request: $e');
+      final error = McpError('Failed to send request: $e');
+      _errorStreamController.add(error);
+      throw error;
     }
 
     try {
@@ -742,13 +814,17 @@ class Client {
         const Duration(seconds: 30),
         onTimeout: () {
           _requestCompleters.remove(id);
-          throw McpError('Request timed out: $method');
+          final error = McpError('Request timed out: $method');
+          _errorStreamController.add(error);
+          throw error;
         },
       );
       return result;
     } catch (e) {
       if (e is! McpError) {
-        throw McpError('Request failed: $e');
+        final error = McpError('Request failed: $e');
+        _errorStreamController.add(error);
+        throw error;
       }
       rethrow;
     }
@@ -768,6 +844,50 @@ class Client {
 
     _transport!.send(notification);
   }
+}
+
+/// Represents server information
+class ServerInfo {
+  /// Server name
+  final String name;
+
+  /// Server version
+  final String version;
+
+  /// Server capabilities
+  final ServerCapabilities capabilities;
+
+  /// Protocol version being used
+  final String protocolVersion;
+
+  /// Creates a new server info
+  ServerInfo({
+    required this.name,
+    required this.version,
+    required this.capabilities,
+    required this.protocolVersion,
+  });
+}
+
+/// Reason for disconnection
+enum DisconnectReason {
+  /// Client explicitly disconnected
+  clientDisconnected,
+
+  /// Transport closed
+  transportClosed,
+
+  /// Transport encountered an error
+  transportError,
+
+  /// Server disconnected the client
+  serverDisconnected,
+
+  /// Session expired on the server
+  sessionExpired,
+
+  /// Unknown reason
+  unknown,
 }
 
 /// Client capabilities configuration
