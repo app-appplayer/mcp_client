@@ -11,7 +11,9 @@ environment:
 dependencies:
   http: ^1.1.0
   json_annotation: ^4.9.0
+  universal_io: ^2.2.2
   uuid: ^4.0.0
+  logger: ^2.5.0
 
 dev_dependencies:
   lints: ^5.0.0

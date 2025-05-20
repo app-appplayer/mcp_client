@@ -4,9 +4,9 @@ import 'src/transport/transport.dart';
 export 'src/models/models.dart';
 export 'src/client/client.dart';
 export 'src/transport/transport.dart';
-export 'logger.dart';
 
 typedef MCPClient = McpClient;
+
 /// Main plugin class for MCP Client implementation
 class McpClient {
   /// Create a new MCP client with the specified configuration

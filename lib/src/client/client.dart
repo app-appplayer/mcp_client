@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
-import '../../logger.dart';
+import 'package:logger/logger.dart';
+
 import '../models/models.dart';
 import '../transport/transport.dart';
 
-final Logger _logger = Logger.getLogger('mcp_client.client');
+final Logger _logger = Logger(
+  printer: PrettyPrinter(printEmojis: false),
+);
 
 /// Main MCP Client class that handles all client-side protocol operations
 class Client {
@@ -109,7 +112,7 @@ class Client {
       try {
         await _processMessage(message);
       } catch (e) {
-        _logger.debug('Error processing message: $e');
+        _logger.d('Error processing message: $e');
         _errorStreamController.add(McpError('Error processing message: $e'));
       }
     });
@@ -171,7 +174,7 @@ class Client {
           try {
             await _processMessage(message);
           } catch (e) {
-            _logger.debug('Error processing message: $e');
+            _logger.d('Error processing message: $e');
             _errorStreamController.add(McpError('Error processing message: $e'));
           }
         });
@@ -207,7 +210,7 @@ class Client {
           throw McpError('Failed to connect after $maxRetries attempts: $e');
         }
 
-        _logger.debug('Connection attempt $attempts failed: $e. Retrying in ${delay.inSeconds} seconds...');
+        _logger.d('Connection attempt $attempts failed: $e. Retrying in ${delay.inSeconds} seconds...');
         await Future.delayed(delay);
       }
     }
@@ -248,12 +251,12 @@ class Client {
     _sendNotification('initialized', {});
 
     _initialized = true;
-    _logger.debug('Initialization complete');
+    _logger.d('Initialization complete');
   }
 
   /// Validate protocol version compatibility
   void _validateProtocolVersion(String serverProtoVersion) {
-    _logger.warning('Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion');
+    _logger.w('Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion');
 
     // Check if server protocol version is at least compatible
     try {
@@ -261,11 +264,11 @@ class Client {
       final serverDate = DateTime.parse(serverProtoVersion);
 
       if (serverDate.isBefore(clientDate)) {
-        _logger.warning('Server protocol version ($serverProtoVersion) is older than client protocol version ($protocolVersion)');
+        _logger.w('Server protocol version ($serverProtoVersion) is older than client protocol version ($protocolVersion)');
       }
     } catch (e) {
       // Date parsing failed, fallback to string comparison
-      _logger.warning('Unable to parse protocol versions as dates for comparison');
+      _logger.w('Unable to parse protocol versions as dates for comparison');
     }
   }
 
@@ -724,7 +727,7 @@ class Client {
       );
       _messageController.add(message);
     } catch (e) {
-      _logger.debug('Error parsing message: $e');
+      _logger.d('Error parsing message: $e');
       _errorStreamController.add(McpError('Error parsing message: $e'));
     }
   }
@@ -736,7 +739,7 @@ class Client {
     } else if (message.isNotification) {
       _handleNotification(message);
     } else {
-      _logger.debug('Ignoring unexpected message type: ${message.toJson()}');
+      _logger.d('Ignoring unexpected message type: ${message.toJson()}');
     }
   }
 
@@ -744,7 +747,7 @@ class Client {
   void _handleResponse(JsonRpcMessage response) {
     final id = response.id;
     if (id == null || id is! int || !_requestCompleters.containsKey(id)) {
-      _logger.debug('Received response with unknown id: $id');
+      _logger.d('Received response with unknown id: $id');
       return;
     }
 
@@ -771,11 +774,11 @@ class Client {
       try {
         handler(params);
       } catch (e) {
-        _logger.debug('Error in notification handler: $e');
+        _logger.d('Error in notification handler: $e');
         _errorStreamController.add(McpError('Error in notification handler: $e'));
       }
     } else {
-      _logger.debug('No handler for notification: $method');
+      _logger.d('No handler for notification: $method');
     }
   }
 
