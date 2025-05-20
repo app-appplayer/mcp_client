@@ -1,14 +1,11 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'package:logger/logger.dart';
+import 'package:mcp_client/src/client/client.dart';
 import 'package:universal_io/io.dart';
 
 import '../models/models.dart';
 
-final Logger _logger = Logger(
-  printer: PrettyPrinter(printEmojis: false),
-);
 
 /// Abstract base class for client transport implementations
 abstract class ClientTransport {
@@ -47,7 +44,7 @@ class StdioClientTransport implements ClientTransport {
     String? workingDirectory,
     Map<String, String>? environment,
   }) async {
-    _logger.d('Starting process: $command ${arguments.join(' ')}');
+    logger.d('Starting process: $command ${arguments.join(' ')}');
 
     final process = await Process.start(
       command,
@@ -60,7 +57,7 @@ class StdioClientTransport implements ClientTransport {
   }
 
   void _initialize() {
-    _logger.d('Initializing STDIO transport');
+    logger.d('Initializing STDIO transport');
 
     // Process stdout stream and handle messages
     var stdoutSubscription = _process.stdout
@@ -69,30 +66,30 @@ class StdioClientTransport implements ClientTransport {
         .where((line) => line.isNotEmpty)
         .map((line) {
           try {
-            _logger.d('Raw received line: $line');
+            logger.d('Raw received line: $line');
             final parsedMessage = jsonDecode(line);
-            _logger.d('Parsed message: $parsedMessage');
+            logger.d('Parsed message: $parsedMessage');
             return parsedMessage;
           } catch (e) {
-            _logger.e('JSON parsing error: $e');
-            _logger.e('Problematic line: $line');
+            logger.e('JSON parsing error: $e');
+            logger.e('Problematic line: $line');
             return null;
           }
         })
         .where((message) => message != null)
         .listen(
           (message) {
-            _logger.d('Processing message: $message');
+            logger.d('Processing message: $message');
             if (!_messageController.isClosed) {
               _messageController.add(message);
             }
           },
           onError: (error) {
-            _logger.e('Stream error: $error');
+            logger.e('Stream error: $error');
             _handleTransportError(error);
           },
           onDone: () {
-            _logger.d('stdout stream done');
+            logger.d('stdout stream done');
             _handleStreamClosure();
           },
           cancelOnError: false,
@@ -106,20 +103,20 @@ class StdioClientTransport implements ClientTransport {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      _logger.e('Server stderr: $line');
+      logger.e('Server stderr: $line');
     });
 
     _processSubscriptions.add(stderrSubscription);
 
     // Handle process exit
     _process.exitCode.then((exitCode) {
-      _logger.d('Process exited with code: $exitCode');
+      logger.d('Process exited with code: $exitCode');
       _handleStreamClosure();
     });
   }
 
   void _handleTransportError(dynamic error) {
-    _logger.e('Transport error: $error');
+    logger.e('Transport error: $error');
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.completeError(error);
     }
@@ -127,7 +124,7 @@ class StdioClientTransport implements ClientTransport {
   }
 
   void _handleStreamClosure() {
-    _logger.d('Handling stream closure');
+    logger.d('Handling stream closure');
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.complete();
     }
@@ -150,7 +147,7 @@ class StdioClientTransport implements ClientTransport {
       _process.kill();
     } catch (e) {
       // Process might already be terminated
-      _logger.e('Error killing process: $e');
+      logger.e('Error killing process: $e');
     }
   }
 
@@ -165,7 +162,7 @@ class StdioClientTransport implements ClientTransport {
   void send(dynamic message) {
     try {
       final jsonMessage = jsonEncode(message);
-      _logger.d('Queueing message: $jsonMessage');
+      logger.d('Queueing message: $jsonMessage');
 
       // Add message to queue
       _messageQueue.add(jsonMessage);
@@ -173,8 +170,8 @@ class StdioClientTransport implements ClientTransport {
       // Start processing queue if not already doing so
       _processMessageQueue();
     } catch (e) {
-      _logger.e('Error encoding message: $e');
-      _logger.e('Original message: $message');
+      logger.e('Error encoding message: $e');
+      logger.e('Original message: $message');
       rethrow;
     }
   }
@@ -200,16 +197,16 @@ class StdioClientTransport implements ClientTransport {
     final message = _messageQueue.removeFirst();
 
     try {
-      _logger.d('Sending message: $message');
+      logger.d('Sending message: $message');
       _process.stdin.writeln(message);
 
       // Use Timer to give stdin a chance to process
       Timer(Duration(milliseconds: 10), () {
-        _logger.d('Message sent successfully');
+        logger.d('Message sent successfully');
         _sendNextMessage();
       });
     } catch (e) {
-      _logger.e('Error sending message: $e');
+      logger.e('Error sending message: $e');
       _isSending = false;
       throw Exception('Failed to write to process stdin: $e');
     }
@@ -217,7 +214,7 @@ class StdioClientTransport implements ClientTransport {
 
   @override
   void close() {
-    _logger.d('Closing StdioClientTransport');
+    logger.d('Closing StdioClientTransport');
     _cleanup();
   }
 }
@@ -264,14 +261,14 @@ class SseClientTransport implements ClientTransport {
               data.containsKey('jsonrpc') &&
               data.containsKey('id') &&
               !transport._messageController.isClosed) {
-            _logger.d('Forwarding JSON-RPC response: $data');
+            logger.d('Forwarding JSON-RPC response: $data');
             transport._messageController.add(data);
           } else if (!transport._messageController.isClosed) {
             transport._messageController.add(data);
           }
         },
         onError: (e) {
-          _logger.e('SSE error: $e');
+          logger.e('SSE error: $e');
           if (!endpointCompleter.isCompleted) {
             endpointCompleter.completeError(e);
           }
@@ -291,7 +288,7 @@ class SseClientTransport implements ClientTransport {
         baseUrl,
         endpointPath,
       );
-      _logger.d('Transport ready with endpoint: ${transport._messageEndpoint}');
+      logger.d('Transport ready with endpoint: ${transport._messageEndpoint}');
 
       return transport;
     } catch (e) {
@@ -322,7 +319,7 @@ class SseClientTransport implements ClientTransport {
         query: endpointUri.query,
       ).toString();
     } catch (e) {
-      _logger.e('Error parsing endpoint URL: $e');
+      logger.e('Error parsing endpoint URL: $e');
       // Fallback to simple concatenation
       return '${baseUrl.origin}$endpointPath';
     }
@@ -344,7 +341,7 @@ class SseClientTransport implements ClientTransport {
   @override
   void send(dynamic message) async {
     if (_isClosed) {
-      _logger.d('Attempted to send on closed transport');
+      logger.d('Attempted to send on closed transport');
       return;
     }
 
@@ -356,7 +353,7 @@ class SseClientTransport implements ClientTransport {
 
     try {
       final jsonMessage = jsonEncode(message);
-      _logger.d('Sending message: $jsonMessage');
+      logger.d('Sending message: $jsonMessage');
 
       final url = Uri.parse(_messageEndpoint!);
       final client = HttpClient();
@@ -377,19 +374,19 @@ class SseClientTransport implements ClientTransport {
       // Just check for successful delivery
       if (response.statusCode == 200) {
         final responseBody = await response.transform(utf8.decoder).join();
-        _logger.d('Message delivery confirmation: $responseBody');
+        logger.d('Message delivery confirmation: $responseBody');
         // Don't forward this to message controller, actual response comes via SSE
       } else {
         final responseBody = await response.transform(utf8.decoder).join();
-        _logger.d('Error response: $responseBody');
+        logger.d('Error response: $responseBody');
         throw McpError('Error sending message: ${response.statusCode}');
       }
 
       // Close the HTTP client
       client.close();
-      _logger.d('Message sent successfully');
+      logger.d('Message sent successfully');
     } catch (e) {
-      _logger.e('Error sending message: $e');
+      logger.e('Error sending message: $e');
       rethrow;
     }
   }
@@ -399,7 +396,7 @@ class SseClientTransport implements ClientTransport {
     if (_isClosed) return;
     _isClosed = true;
 
-    _logger.d('Closing SseClientTransport');
+    logger.d('Closing SseClientTransport');
     _subscription?.cancel();
     _eventSource.close();
     if (!_messageController.isClosed) {
@@ -431,7 +428,7 @@ class EventSource {
     Function(dynamic)? onMessage,
     Function(dynamic)? onError,
   }) async {
-    _logger.d('EventSource connecting');
+    logger.d('EventSource connecting');
 
     if (_isConnected) {
       throw McpError('EventSource is already connected');
@@ -461,13 +458,13 @@ class EventSource {
       }
 
       _isConnected = true;
-      _logger.d('EventSource connection established');
+      logger.d('EventSource connection established');
 
       // Set up subscription to process events
       _subscription = _response!.transform(utf8.decoder).listen(
         (chunk) {
           // Log raw data for debugging
-          _logger.d('Raw SSE data: $chunk');
+          logger.d('Raw SSE data: $chunk');
           _buffer.write(chunk);
 
           // Process all events in buffer
@@ -476,7 +473,7 @@ class EventSource {
           // Simple check for JSON-RPC responses
           if (content.contains('"jsonrpc":"2.0"') ||
               content.contains('"jsonrpc": "2.0"')) {
-            _logger.d('Detected JSON-RPC data in SSE stream');
+            logger.d('Detected JSON-RPC data in SSE stream');
 
             try {
               // Try to extract JSON objects from the stream
@@ -485,11 +482,11 @@ class EventSource {
 
               if (jsonStart >= 0 && jsonEnd > jsonStart) {
                 final jsonStr = content.substring(jsonStart, jsonEnd);
-                _logger.d('Extracted JSON: $jsonStr');
+                logger.d('Extracted JSON: $jsonStr');
 
                 try {
                   final jsonData = jsonDecode(jsonStr);
-                  _logger.d('Parsed JSON-RPC data: $jsonData');
+                  logger.d('Parsed JSON-RPC data: $jsonData');
 
                   // Clear the processed part from buffer
                   if (jsonEnd < content.length) {
@@ -505,11 +502,11 @@ class EventSource {
                   }
                   return; // Processed JSON data
                 } catch (e) {
-                  _logger.e('JSON parse error: $e');
+                  logger.e('JSON parse error: $e');
                 }
               }
             } catch (e) {
-              _logger.e('Error extracting JSON: $e');
+              logger.e('Error extracting JSON: $e');
             }
           }
 
@@ -526,14 +523,14 @@ class EventSource {
           }
         },
         onError: (e) {
-          _logger.e('EventSource error: $e');
+          logger.e('EventSource error: $e');
           _isConnected = false;
           if (onError != null) {
             onError(e);
           }
         },
         onDone: () {
-          _logger.d('EventSource stream closed');
+          logger.d('EventSource stream closed');
           _isConnected = false;
           if (onError != null) {
             onError('Connection closed');
@@ -541,7 +538,7 @@ class EventSource {
         },
       );
     } catch (e) {
-      _logger.e('EventSource connection error: $e');
+      logger.e('EventSource connection error: $e');
       _isConnected = false;
       if (onError != null) {
         onError(e);
@@ -553,7 +550,7 @@ class EventSource {
   // Process the buffer to find SSE events
   _SseEvent _processBuffer() {
     final lines = _buffer.toString().split('\n');
-    _logger.d('_processBuffer lines count: ${lines.length}');
+    logger.d('_processBuffer lines count: ${lines.length}');
 
     String currentEvent = '';
     String? currentData;
@@ -566,15 +563,15 @@ class EventSource {
       if (line.startsWith('event:') && !isCheckedType) {
         currentEvent = line.substring(6).trim();
         isCheckedType = true;
-        _logger.d('Found event type: $currentEvent');
+        logger.d('Found event type: $currentEvent');
       } else if (line.startsWith('data:') && !isCheckedData) {
         currentData = line.substring(5).trim();
         isCheckedData = true;
-        _logger.d('Found event data: $currentData');
+        logger.d('Found event data: $currentData');
       }
 
       if (isCheckedType && isCheckedData) {
-        _logger.d('Creating event: $currentEvent, data: $currentData');
+        logger.d('Creating event: $currentEvent, data: $currentData');
         return _SseEvent(currentEvent, currentData);
       }
     }
@@ -584,7 +581,7 @@ class EventSource {
   }
 
   void close() {
-    _logger.d('Closing EventSource');
+    logger.d('Closing EventSource');
 
     // Cancel SSE stream listener
     _subscription?.cancel();
@@ -592,11 +589,11 @@ class EventSource {
     // Attempt to forcibly close the underlying TCP connection
     try {
       _response?.detachSocket().then((socket) {
-        _logger.d('Detached socket - destroying...');
+        logger.d('Detached socket - destroying...');
         socket.destroy(); // Force-close TCP connection
       });
     } catch (e) {
-      _logger.e('Error detaching socket: $e');
+      logger.e('Error detaching socket: $e');
     }
 
     // Abort request if it is still active
