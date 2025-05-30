@@ -1,11 +1,11 @@
-import 'dart:io';
+import 'package:logger/logger.dart';
+import 'package:universal_io/io.dart';
 import 'dart:convert';
 import 'package:mcp_client/mcp_client.dart';
 
 /// MCP 클라이언트 예제 애플리케이션
 void main() async {
-  final Logger _logger = Logger.getLogger('mcp_client_example');
-  _logger.setLevel(LogLevel.debug);
+  final Logger _logger = Logger();
 
   // 로그 파일 생성
   final logFile = File('mcp_client_example.log');
@@ -212,7 +212,7 @@ void main() async {
 /// 콘솔과 파일에 동시에 로그 기록
 void logToConsoleAndFile(String message, Logger logger, IOSink logSink) {
   // 콘솔에 로그 출력
-  logger.debug(message);
+  logger.d(message);
 
   // 파일에도 로그 기록
   logSink.writeln(message);

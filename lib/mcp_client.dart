@@ -1,12 +1,14 @@
+import 'package:logger/logger.dart';
+
 import 'src/client/client.dart';
 import 'src/transport/transport.dart';
 
-export 'src/models/models.dart';
 export 'src/client/client.dart';
+export 'src/models/models.dart';
 export 'src/transport/transport.dart';
-export 'logger.dart';
 
 typedef MCPClient = McpClient;
+
 /// Main plugin class for MCP Client implementation
 class McpClient {
   /// Create a new MCP client with the specified configuration
@@ -59,9 +61,10 @@ class McpClient {
     required String serverUrl,
     Map<String, String>? headers,
   }) {
-    return SseClientTransport.create(
-      serverUrl: serverUrl,
-      headers: headers,
-    );
+    return SseClientTransport.create(serverUrl: serverUrl, headers: headers);
+  }
+
+  static void changeLogVisibility({required bool visible}) {
+    Logger.level = visible ? Level.all : Level.off;
   }
 }

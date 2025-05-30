@@ -1,15 +1,7 @@
 /// Base content type enum for MCP
-enum MessageRole {
-  user,
-  assistant,
-  system,
-}
+enum MessageRole { user, assistant, system }
 
-enum MCPContentType {
-  text,
-  image,
-  resource,
-}
+enum MCPContentType { text, image, resource }
 
 /// Base class for all MCP content types
 abstract class Content {
@@ -54,10 +46,7 @@ class TextContent extends Content {
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'type': 'text',
-      'text': text,
-    };
+    return {'type': 'text', 'text': text};
   }
 
   factory TextContent.fromJson(Map<String, dynamic> json) {
@@ -71,20 +60,14 @@ class ImageContent extends Content {
   final String? data;
   final String mimeType;
 
-  ImageContent({
-    this.url,
-    this.data,
-    required this.mimeType,
-  }) : super(MCPContentType.image);
+  ImageContent({this.url, this.data, required this.mimeType})
+    : super(MCPContentType.image);
 
   factory ImageContent.fromBase64({
     required String data,
     required String mimeType,
   }) {
-    return ImageContent(
-      data: data,
-      mimeType: mimeType,
-    );
+    return ImageContent(data: data, mimeType: mimeType);
   }
 
   factory ImageContent.fromJson(Map<String, dynamic> json) {
@@ -97,10 +80,7 @@ class ImageContent extends Content {
 
   @override
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
-      'type': 'image',
-      'mimeType': mimeType,
-    };
+    final Map<String, dynamic> result = {'type': 'image', 'mimeType': mimeType};
 
     if (url != null) {
       result['url'] = url;
@@ -142,10 +122,7 @@ class ResourceContent extends Content {
 
   @override
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
-      'type': 'resource',
-      'uri': uri,
-    };
+    final Map<String, dynamic> result = {'type': 'resource', 'uri': uri};
 
     if (text != null) {
       result['text'] = text;
@@ -187,7 +164,9 @@ class Tool {
     return Tool(
       name: json['name'] as String,
       description: (json['description'] ?? '') as String,
-      inputSchema: (json['inputSchema'] as Map<dynamic, dynamic>).cast<String, dynamic>(),
+      inputSchema:
+          (json['inputSchema'] as Map<dynamic, dynamic>)
+              .cast<String, dynamic>(),
     );
   }
 }
@@ -198,11 +177,7 @@ class CallToolResult {
   final bool isStreaming;
   final bool? isError;
 
-  CallToolResult(
-      this.content, {
-        this.isStreaming = false,
-        this.isError,
-      });
+  CallToolResult(this.content, {this.isStreaming = false, this.isError});
 
   Map<String, dynamic> toJson() {
     return {
@@ -214,10 +189,11 @@ class CallToolResult {
 
   factory CallToolResult.fromJson(Map<String, dynamic> json) {
     final List<dynamic> contentList = json['content'] as List<dynamic>? ?? [];
-    final List<Content> contents = contentList.map((contentData) {
-      final contentMap = contentData as Map<String, dynamic>;
-      return Content.fromJson(contentMap);
-    }).toList();
+    final List<Content> contents =
+        contentList.map((contentData) {
+          final contentMap = contentData as Map<String, dynamic>;
+          return Content.fromJson(contentMap);
+        }).toList();
 
     return CallToolResult(
       contents,
@@ -317,12 +293,7 @@ class ResourceContentInfo {
   final String? text;
   final String? blob;
 
-  ResourceContentInfo({
-    required this.uri,
-    this.mimeType,
-    this.text,
-    this.blob,
-  });
+  ResourceContentInfo({required this.uri, this.mimeType, this.text, this.blob});
 
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> result = {'uri': uri};
@@ -356,21 +327,21 @@ class ResourceContentInfo {
 class ReadResourceResult {
   final List<ResourceContentInfo> contents;
 
-  ReadResourceResult({
-    required this.contents,
-  });
+  ReadResourceResult({required this.contents});
 
   Map<String, dynamic> toJson() {
-    return {
-      'contents': contents.map((c) => c.toJson()).toList(),
-    };
+    return {'contents': contents.map((c) => c.toJson()).toList()};
   }
 
   factory ReadResourceResult.fromJson(Map<String, dynamic> json) {
     final List<dynamic> contentsList = json['contents'] as List<dynamic>? ?? [];
-    final contents = contentsList
-        .map((content) => ResourceContentInfo.fromJson(content as Map<String, dynamic>))
-        .toList();
+    final contents =
+        contentsList
+            .map(
+              (content) =>
+                  ResourceContentInfo.fromJson(content as Map<String, dynamic>),
+            )
+            .toList();
 
     return ReadResourceResult(contents: contents);
   }
@@ -436,9 +407,10 @@ class Prompt {
 
   factory Prompt.fromJson(Map<String, dynamic> json) {
     final List<dynamic> argsList = json['arguments'] as List<dynamic>? ?? [];
-    final arguments = argsList
-        .map((arg) => PromptArgument.fromJson(arg as Map<String, dynamic>))
-        .toList();
+    final arguments =
+        argsList
+            .map((arg) => PromptArgument.fromJson(arg as Map<String, dynamic>))
+            .toList();
 
     return Prompt(
       name: json['name'] as String,
@@ -453,16 +425,10 @@ class Message {
   final String role;
   final Content content;
 
-  Message({
-    required this.role,
-    required this.content,
-  });
+  Message({required this.role, required this.content});
 
   Map<String, dynamic> toJson() {
-    return {
-      'role': role,
-      'content': content.toJson(),
-    };
+    return {'role': role, 'content': content.toJson()};
   }
 
   factory Message.fromJson(Map<String, dynamic> json) {
@@ -480,10 +446,7 @@ class GetPromptResult {
   final String? description;
   final List<Message> messages;
 
-  GetPromptResult({
-    this.description,
-    required this.messages,
-  });
+  GetPromptResult({this.description, required this.messages});
 
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> result = {
@@ -499,9 +462,10 @@ class GetPromptResult {
 
   factory GetPromptResult.fromJson(Map<String, dynamic> json) {
     final List<dynamic> messagesList = json['messages'] as List<dynamic>? ?? [];
-    final messages = messagesList
-        .map((message) => Message.fromJson(message as Map<String, dynamic>))
-        .toList();
+    final messages =
+        messagesList
+            .map((message) => Message.fromJson(message as Map<String, dynamic>))
+            .toList();
 
     return GetPromptResult(
       description: json['description'] as String?,
@@ -515,10 +479,7 @@ class ModelHint {
   final String name;
   final double? weight;
 
-  ModelHint({
-    required this.name,
-    this.weight,
-  });
+  ModelHint({required this.name, this.weight});
 
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> result = {'name': name};
@@ -574,9 +535,10 @@ class ModelPreferences {
 
   factory ModelPreferences.fromJson(Map<String, dynamic> json) {
     final List<dynamic>? hintsList = json['hints'] as List<dynamic>?;
-    final hints = hintsList
-        ?.map((hint) => ModelHint.fromJson(hint as Map<String, dynamic>))
-        .toList();
+    final hints =
+        hintsList
+            ?.map((hint) => ModelHint.fromJson(hint as Map<String, dynamic>))
+            .toList();
 
     return ModelPreferences(
       hints: hints,
@@ -647,29 +609,35 @@ class CreateMessageRequest {
 
   factory CreateMessageRequest.fromJson(Map<String, dynamic> json) {
     final List<dynamic> messagesList = json['messages'] as List<dynamic>? ?? [];
-    final messages = messagesList
-        .map((message) => Message.fromJson(message as Map<String, dynamic>))
-        .toList();
+    final messages =
+        messagesList
+            .map((message) => Message.fromJson(message as Map<String, dynamic>))
+            .toList();
 
     // 추출 및 변환
-    final List<dynamic>? stopSequencesList = json['stopSequences'] as List<dynamic>?;
-    final stopSequences = stopSequencesList
-        ?.map((sequence) => sequence as String)
-        .toList();
+    final List<dynamic>? stopSequencesList =
+        json['stopSequences'] as List<dynamic>?;
+    final stopSequences =
+        stopSequencesList?.map((sequence) => sequence as String).toList();
 
     return CreateMessageRequest(
       messages: messages,
-      modelPreferences: json['modelPreferences'] != null
-          ? ModelPreferences.fromJson(json['modelPreferences'] as Map<String, dynamic>)
-          : null,
+      modelPreferences:
+          json['modelPreferences'] != null
+              ? ModelPreferences.fromJson(
+                json['modelPreferences'] as Map<String, dynamic>,
+              )
+              : null,
       systemPrompt: json['systemPrompt'] as String?,
       includeContext: json['includeContext'] as String?,
       maxTokens: json['maxTokens'] as int?,
       temperature: json['temperature'] as double?,
       stopSequences: stopSequences,
-      metadata: json['metadata'] != null
-          ? (json['metadata'] as Map<dynamic, dynamic>).cast<String, dynamic>()
-          : null,
+      metadata:
+          json['metadata'] != null
+              ? (json['metadata'] as Map<dynamic, dynamic>)
+                  .cast<String, dynamic>()
+              : null,
     );
   }
 }
@@ -720,17 +688,10 @@ class Root {
   final String name;
   final String? description;
 
-  Root({
-    required this.uri,
-    required this.name,
-    this.description,
-  });
+  Root({required this.uri, required this.name, this.description});
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
-      'uri': uri,
-      'name': name,
-    };
+    final Map<String, dynamic> result = {'uri': uri, 'name': name};
 
     if (description != null) {
       result['description'] = description;
@@ -767,6 +728,7 @@ class JsonRpcMessage {
   final Map<String, dynamic>? params;
   final dynamic result;
   final Map<String, dynamic>? error;
+  final Map<String, dynamic>? headers;
 
   bool get isNotification => id == null && method != null;
   bool get isRequest => id != null && method != null;
@@ -779,6 +741,7 @@ class JsonRpcMessage {
     this.params,
     this.result,
     this.error,
+    this.headers,
   });
 
   factory JsonRpcMessage.fromJson(Map<String, dynamic> json) {
@@ -786,9 +749,12 @@ class JsonRpcMessage {
     Map<String, dynamic>? params;
     if (json['params'] != null) {
       if (json['params'] is Map) {
-        params = (json['params'] as Map<dynamic, dynamic>).cast<String, dynamic>();
+        params =
+            (json['params'] as Map<dynamic, dynamic>).cast<String, dynamic>();
       } else {
-        throw FormatException('Invalid params: expected a Map, got ${json['params'].runtimeType}');
+        throw FormatException(
+          'Invalid params: expected a Map, got ${json['params'].runtimeType}',
+        );
       }
     }
 
@@ -796,9 +762,24 @@ class JsonRpcMessage {
     Map<String, dynamic>? error;
     if (json['error'] != null) {
       if (json['error'] is Map) {
-        error = (json['error'] as Map<dynamic, dynamic>).cast<String, dynamic>();
+        error =
+            (json['error'] as Map<dynamic, dynamic>).cast<String, dynamic>();
       } else {
-        throw FormatException('Invalid error: expected a Map, got ${json['error'].runtimeType}');
+        throw FormatException(
+          'Invalid error: expected a Map, got ${json['error'].runtimeType}',
+        );
+      }
+    }
+
+    Map<String, dynamic>? headers;
+    if (json['headers'] != null) {
+      if (json['headers'] is Map) {
+        headers =
+            (json['headers'] as Map<dynamic, dynamic>).cast<String, dynamic>();
+      } else {
+        throw FormatException(
+          'Invalid headers: expected a Map, got ${json['headers'].runtimeType}',
+        );
       }
     }
 
@@ -809,6 +790,7 @@ class JsonRpcMessage {
       params: params,
       result: json['result'],
       error: error,
+      headers: headers,
     );
   }
 
@@ -833,6 +815,10 @@ class JsonRpcMessage {
 
     if (error != null) {
       json['error'] = error;
+    }
+
+    if (headers != null) {
+      json['headers'] = headers;
     }
 
     return json;
@@ -981,11 +967,7 @@ class ProgressUpdate {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'requestId': requestId,
-      'progress': progress,
-      'message': message,
-    };
+    return {'requestId': requestId, 'progress': progress, 'message': message};
   }
 }
 
@@ -1036,5 +1018,5 @@ enum McpLogLevel {
   error,
   critical,
   alert,
-  emergency
+  emergency,
 }

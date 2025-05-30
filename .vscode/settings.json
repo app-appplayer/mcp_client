@@ -1,0 +1,10 @@
+{
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit",
+    "source.fixAll": "explicit"
+  },
+  "dart.runPubGetOnPubspecChanges": "never",
+  "dart.addSdkToTerminalPath": false,
+  "dart.flutterSdkPath": ".fvm/versions/3.29.3"
+}
