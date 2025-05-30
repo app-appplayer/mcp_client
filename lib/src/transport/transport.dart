@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+
 import 'package:mcp_client/src/client/client.dart';
 import 'package:universal_io/io.dart';
 
 import '../models/models.dart';
-
 
 /// Abstract base class for client transport implementations
 abstract class ClientTransport {
@@ -16,7 +16,7 @@ abstract class ClientTransport {
   Future<void> get onClose;
 
   /// Send a message through the transport
-  void send(dynamic message);
+  void send(Map<String, dynamic> message);
 
   /// Close the transport
   void close();
@@ -103,8 +103,8 @@ class StdioClientTransport implements ClientTransport {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      logger.e('Server stderr: $line');
-    });
+          logger.e('Server stderr: $line');
+        });
 
     _processSubscriptions.add(stderrSubscription);
 
@@ -159,7 +159,7 @@ class StdioClientTransport implements ClientTransport {
 
   // Add message to queue and process it
   @override
-  void send(dynamic message) {
+  void send(Map<String, dynamic> message) {
     try {
       final jsonMessage = jsonEncode(message);
       logger.d('Queueing message: $jsonMessage');
@@ -339,7 +339,7 @@ class SseClientTransport implements ClientTransport {
   Future<void> get onClose => _closeCompleter.future;
 
   @override
-  void send(dynamic message) async {
+  void send(Map<String, dynamic> message) async {
     if (_isClosed) {
       logger.d('Attempted to send on closed transport');
       return;
@@ -364,6 +364,13 @@ class SseClientTransport implements ClientTransport {
       if (headers != null) {
         headers!.forEach((name, value) {
           request.headers.add(name, value);
+        });
+      }
+
+      final messageHeaders = message['headers'] as Map<String, dynamic>?;
+      if (messageHeaders != null) {
+        messageHeaders.forEach((name, value) {
+          request.headers.set(name, value);
         });
       }
 
@@ -461,82 +468,84 @@ class EventSource {
       logger.d('EventSource connection established');
 
       // Set up subscription to process events
-      _subscription = _response!.transform(utf8.decoder).listen(
-        (chunk) {
-          // Log raw data for debugging
-          logger.d('Raw SSE data: $chunk');
-          _buffer.write(chunk);
+      _subscription = _response!
+          .transform(utf8.decoder)
+          .listen(
+            (chunk) {
+              // Log raw data for debugging
+              logger.d('Raw SSE data: $chunk');
+              _buffer.write(chunk);
 
-          // Process all events in buffer
-          final content = _buffer.toString();
+              // Process all events in buffer
+              final content = _buffer.toString();
 
-          // Simple check for JSON-RPC responses
-          if (content.contains('"jsonrpc":"2.0"') ||
-              content.contains('"jsonrpc": "2.0"')) {
-            logger.d('Detected JSON-RPC data in SSE stream');
-
-            try {
-              // Try to extract JSON objects from the stream
-              final jsonStart = content.indexOf('{');
-              final jsonEnd = content.lastIndexOf('}') + 1;
-
-              if (jsonStart >= 0 && jsonEnd > jsonStart) {
-                final jsonStr = content.substring(jsonStart, jsonEnd);
-                logger.d('Extracted JSON: $jsonStr');
+              // Simple check for JSON-RPC responses
+              if (content.contains('"jsonrpc":"2.0"') ||
+                  content.contains('"jsonrpc": "2.0"')) {
+                logger.d('Detected JSON-RPC data in SSE stream');
 
                 try {
-                  final jsonData = jsonDecode(jsonStr);
-                  logger.d('Parsed JSON-RPC data: $jsonData');
+                  // Try to extract JSON objects from the stream
+                  final jsonStart = content.indexOf('{');
+                  final jsonEnd = content.lastIndexOf('}') + 1;
 
-                  // Clear the processed part from buffer
-                  if (jsonEnd < content.length) {
-                    _buffer.clear();
-                    _buffer.write(content.substring(jsonEnd));
-                  } else {
-                    _buffer.clear();
-                  }
+                  if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                    final jsonStr = content.substring(jsonStart, jsonEnd);
+                    logger.d('Extracted JSON: $jsonStr');
 
-                  // Forward to message handler
-                  if (onMessage != null) {
-                    onMessage(jsonData);
+                    try {
+                      final jsonData = jsonDecode(jsonStr);
+                      logger.d('Parsed JSON-RPC data: $jsonData');
+
+                      // Clear the processed part from buffer
+                      if (jsonEnd < content.length) {
+                        _buffer.clear();
+                        _buffer.write(content.substring(jsonEnd));
+                      } else {
+                        _buffer.clear();
+                      }
+
+                      // Forward to message handler
+                      if (onMessage != null) {
+                        onMessage(jsonData);
+                      }
+                      return; // Processed JSON data
+                    } catch (e) {
+                      logger.e('JSON parse error: $e');
+                    }
                   }
-                  return; // Processed JSON data
                 } catch (e) {
-                  logger.e('JSON parse error: $e');
+                  logger.e('Error extracting JSON: $e');
                 }
               }
-            } catch (e) {
-              logger.e('Error extracting JSON: $e');
-            }
-          }
 
-          // If no JSON-RPC data found, try regular SSE event processing
-          final event = _processBuffer();
+              // If no JSON-RPC data found, try regular SSE event processing
+              final event = _processBuffer();
 
-          if (event.event == 'endpoint' &&
-              event.data != null &&
-              onOpen != null) {
-            // Handle endpoint event
-            onOpen(event.data);
-          } else if (event.data != null && onMessage != null) {
-            onMessage(event.data);
-          }
-        },
-        onError: (e) {
-          logger.e('EventSource error: $e');
-          _isConnected = false;
-          if (onError != null) {
-            onError(e);
-          }
-        },
-        onDone: () {
-          logger.d('EventSource stream closed');
-          _isConnected = false;
-          if (onError != null) {
-            onError('Connection closed');
-          }
-        },
-      );
+              if (event.event == 'endpoint' &&
+                  event.data != null &&
+                  onOpen != null) {
+                // Handle endpoint event
+                onOpen(event.data);
+              } else if (event.data != null && onMessage != null) {
+                onMessage(event.data);
+              }
+            },
+            onError: (e) {
+              logger.e('EventSource error: $e');
+              _isConnected = false;
+              if (onError != null) {
+                onError(e);
+              }
+            },
+            onDone: () {
+              logger.d('EventSource stream closed');
+              _isConnected = false;
+              if (onError != null) {
+                onError('Connection closed');
+              }
+            },
+          );
     } catch (e) {
       logger.e('EventSource connection error: $e');
       _isConnected = false;
