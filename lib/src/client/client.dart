@@ -3,9 +3,10 @@ import 'dart:convert';
 
 import '../../logger.dart';
 import '../models/models.dart';
+import '../protocol/protocol.dart';
 import '../transport/transport.dart';
 
-final Logger _logger = Logger.getLogger('mcp_client.client');
+final Logger _logger = Logger('mcp_client.client');
 
 /// Main MCP Client class that handles all client-side protocol operations
 class Client {
@@ -19,7 +20,7 @@ class Client {
   final ClientCapabilities capabilities;
 
   /// Protocol version this client implements
-  final String protocolVersion = "2024-11-05";
+  final String protocolVersion = McpProtocol.defaultVersion;
 
   /// Transport connection
   ClientTransport? _transport;
@@ -31,7 +32,8 @@ class Client {
   final _connectStreamController = StreamController<ServerInfo>.broadcast();
 
   /// Stream controller for disconnection events
-  final _disconnectStreamController = StreamController<DisconnectReason>.broadcast();
+  final _disconnectStreamController =
+      StreamController<DisconnectReason>.broadcast();
 
   /// Stream controller for error events
   final _errorStreamController = StreamController<McpError>.broadcast();
@@ -70,7 +72,8 @@ class Client {
   Stream<ServerInfo> get onConnect => _connectStreamController.stream;
 
   /// Stream of disconnection events
-  Stream<DisconnectReason> get onDisconnect => _disconnectStreamController.stream;
+  Stream<DisconnectReason> get onDisconnect =>
+      _disconnectStreamController.stream;
 
   /// Stream of error events
   Stream<McpError> get onError => _errorStreamController.stream;
@@ -95,14 +98,22 @@ class Client {
     _connecting = true;
     _transport = transport;
     _transport!.onMessage.listen(_handleMessage);
-    _transport!.onClose.then((_) {
-      _disconnectStreamController.add(DisconnectReason.transportClosed);
-      _onDisconnect();
-    }).catchError((error) {
-      _errorStreamController.add(McpError('Transport error: $error'));
-      _disconnectStreamController.add(DisconnectReason.transportError);
-      _onDisconnect();
-    });
+    _transport!.onClose
+        .then((_) {
+          // Only send disconnect event if we're still connected
+          if (_transport != null) {
+            _disconnectStreamController.add(DisconnectReason.transportClosed);
+            _onDisconnect();
+          }
+        })
+        .catchError((error) {
+          // Only handle error if we're still connected
+          if (_transport != null) {
+            _errorStreamController.add(McpError('Transport error: $error'));
+            _disconnectStreamController.add(DisconnectReason.transportError);
+            _onDisconnect();
+          }
+        });
 
     // Set up message handling
     _messageController.stream.listen((message) async {
@@ -121,12 +132,14 @@ class Client {
 
       // Emit connection event after successful initialization
       if (_initialized && _serverInfo != null && _serverCapabilities != null) {
-        _connectStreamController.add(ServerInfo(
-          name: _serverInfo!['name'] as String? ?? 'Unknown',
-          version: _serverInfo!['version'] as String? ?? 'Unknown',
-          capabilities: _serverCapabilities!,
-          protocolVersion: protocolVersion,
-        ));
+        _connectStreamController.add(
+          ServerInfo(
+            name: _serverInfo!['name'] as String? ?? 'Unknown',
+            version: _serverInfo!['version'] as String? ?? 'Unknown',
+            capabilities: _serverCapabilities!.toJson(),
+            protocolVersion: protocolVersion,
+          ),
+        );
       }
     } catch (e) {
       _connecting = false;
@@ -138,10 +151,10 @@ class Client {
 
   /// Connect with retry mechanism
   Future<void> connectWithRetry(
-      ClientTransport transport, {
-        int maxRetries = 3,
-        Duration delay = const Duration(seconds: 2)
-      }) async {
+    ClientTransport transport, {
+    int maxRetries = 3,
+    Duration delay = const Duration(seconds: 2),
+  }) async {
     if (_transport != null) {
       throw McpError('Client is already connected to a transport');
     }
@@ -157,14 +170,26 @@ class Client {
       try {
         _transport = transport;
         _transport!.onMessage.listen(_handleMessage);
-        _transport!.onClose.then((_) {
-          _disconnectStreamController.add(DisconnectReason.transportClosed);
-          _onDisconnect();
-        }).catchError((error) {
-          _errorStreamController.add(McpError('Transport error: $error'));
-          _disconnectStreamController.add(DisconnectReason.transportError);
-          _onDisconnect();
-        });
+        _transport!.onClose
+            .then((_) {
+              // Only send disconnect event if we're still connected
+              if (_transport != null) {
+                _disconnectStreamController.add(
+                  DisconnectReason.transportClosed,
+                );
+                _onDisconnect();
+              }
+            })
+            .catchError((error) {
+              // Only handle error if we're still connected
+              if (_transport != null) {
+                _errorStreamController.add(McpError('Transport error: $error'));
+                _disconnectStreamController.add(
+                  DisconnectReason.transportError,
+                );
+                _onDisconnect();
+              }
+            });
 
         // Message handling setup
         _messageController.stream.listen((message) async {
@@ -172,7 +197,9 @@ class Client {
             await _processMessage(message);
           } catch (e) {
             _logger.debug('Error processing message: $e');
-            _errorStreamController.add(McpError('Error processing message: $e'));
+            _errorStreamController.add(
+              McpError('Error processing message: $e'),
+            );
           }
         });
 
@@ -181,13 +208,17 @@ class Client {
         _connecting = false;
 
         // Emit connection event after successful initialization
-        if (_initialized && _serverInfo != null && _serverCapabilities != null) {
-          _connectStreamController.add(ServerInfo(
-            name: _serverInfo!['name'] as String? ?? 'Unknown',
-            version: _serverInfo!['version'] as String? ?? 'Unknown',
-            capabilities: _serverCapabilities!,
-            protocolVersion: protocolVersion,
-          ));
+        if (_initialized &&
+            _serverInfo != null &&
+            _serverCapabilities != null) {
+          _connectStreamController.add(
+            ServerInfo(
+              name: _serverInfo!['name'] as String? ?? 'Unknown',
+              version: _serverInfo!['version'] as String? ?? 'Unknown',
+              capabilities: _serverCapabilities!.toJson(),
+              protocolVersion: protocolVersion,
+            ),
+          );
         }
 
         return; // Successfully connected
@@ -203,11 +234,15 @@ class Client {
         attempts++;
         if (attempts >= maxRetries) {
           _connecting = false;
-          _errorStreamController.add(McpError('Failed to connect after $maxRetries attempts: $e'));
+          _errorStreamController.add(
+            McpError('Failed to connect after $maxRetries attempts: $e'),
+          );
           throw McpError('Failed to connect after $maxRetries attempts: $e');
         }
 
-        _logger.debug('Connection attempt $attempts failed: $e. Retrying in ${delay.inSeconds} seconds...');
+        _logger.debug(
+          'Connection attempt $attempts failed: $e. Retrying in ${delay.inSeconds} seconds...',
+        );
         await Future.delayed(delay);
       }
     }
@@ -225,10 +260,7 @@ class Client {
 
     final response = await _sendRequest('initialize', {
       'protocolVersion': protocolVersion,
-      'clientInfo': {
-        'name': name,
-        'version': version,
-      },
+      'clientInfo': {'name': name, 'version': version},
       'capabilities': capabilities.toJson(),
     });
 
@@ -242,10 +274,15 @@ class Client {
     }
 
     _serverInfo = response['serverInfo'];
-    _serverCapabilities = ServerCapabilities.fromJson(response['capabilities'] ?? {});
+    final capabilitiesData = response['capabilities'];
+    _serverCapabilities = ServerCapabilities.fromJson(
+      capabilitiesData != null
+          ? Map<String, dynamic>.from(capabilitiesData as Map)
+          : {},
+    );
 
     // Send initialized notification
-    _sendNotification('initialized', {});
+    _sendNotification('notifications/initialized', {});
 
     _initialized = true;
     _logger.debug('Initialization complete');
@@ -253,7 +290,9 @@ class Client {
 
   /// Validate protocol version compatibility
   void _validateProtocolVersion(String serverProtoVersion) {
-    _logger.warning('Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion');
+    _logger.warning(
+      'Protocol version mismatch: Client=$protocolVersion, Server=$serverProtoVersion',
+    );
 
     // Check if server protocol version is at least compatible
     try {
@@ -261,11 +300,15 @@ class Client {
       final serverDate = DateTime.parse(serverProtoVersion);
 
       if (serverDate.isBefore(clientDate)) {
-        _logger.warning('Server protocol version ($serverProtoVersion) is older than client protocol version ($protocolVersion)');
+        _logger.warning(
+          'Server protocol version ($serverProtoVersion) is older than client protocol version ($protocolVersion)',
+        );
       }
     } catch (e) {
       // Date parsing failed, fallback to string comparison
-      _logger.warning('Unable to parse protocol versions as dates for comparison');
+      _logger.warning(
+        'Unable to parse protocol versions as dates for comparison',
+      );
     }
   }
 
@@ -285,7 +328,10 @@ class Client {
   }
 
   /// Call a tool on the server
-  Future<CallToolResult> callTool(String name, Map<String, dynamic> toolArguments) async {
+  Future<CallToolResult> callTool(
+    String name,
+    Map<String, dynamic> toolArguments,
+  ) async {
     if (!_initialized) {
       throw McpError('Client is not initialized');
     }
@@ -312,10 +358,10 @@ class Client {
   ///
   /// Returns a Future that resolves to a tuple of (operationId, result)
   Future<ToolCallTracking> callToolWithTracking(
-      String name,
-      Map<String, dynamic> arguments,
-      {bool trackProgress = true}
-      ) async {
+    String name,
+    Map<String, dynamic> arguments, {
+    bool trackProgress = true,
+  }) async {
     if (!_initialized) {
       throw McpError('Client is not initialized');
     }
@@ -334,10 +380,7 @@ class Client {
     final operationId = response['operationId'] as String?;
     final result = CallToolResult.fromJson(response);
 
-    return ToolCallTracking(
-      operationId: operationId,
-      result: result,
-    );
+    return ToolCallTracking(operationId: operationId, result: result);
   }
 
   /// Cancel an operation that is in progress on the server
@@ -350,9 +393,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    await _sendRequest('cancel', {
-      'id': operationId,
-    });
+    await _sendRequest('cancel', {'id': operationId});
   }
 
   /// List available resources on the server
@@ -367,7 +408,9 @@ class Client {
 
     final response = await _sendRequest('resources/list', {});
     final resourcesList = response['resources'] as List<dynamic>;
-    return resourcesList.map((resource) => Resource.fromJson(resource)).toList();
+    return resourcesList
+        .map((resource) => Resource.fromJson(resource))
+        .toList();
   }
 
   /// Read a resource from the server
@@ -380,9 +423,7 @@ class Client {
       throw McpError('Server does not support resources');
     }
 
-    final response = await _sendRequest('resources/read', {
-      'uri': uri,
-    });
+    final response = await _sendRequest('resources/read', {'uri': uri});
 
     return ReadResourceResult.fromJson(response);
   }
@@ -393,7 +434,10 @@ class Client {
   /// [params] - Parameters to fill in the template
   ///
   /// Returns a Future that resolves to the resource content
-  Future<ReadResourceResult> getResourceWithTemplate(String templateUri, Map<String, dynamic> params) async {
+  Future<ReadResourceResult> getResourceWithTemplate(
+    String templateUri,
+    Map<String, dynamic> params,
+  ) async {
     if (!_initialized) {
       throw McpError('Client is not initialized');
     }
@@ -423,9 +467,7 @@ class Client {
       throw McpError('Server does not support resources');
     }
 
-    await _sendRequest('resources/subscribe', {
-      'uri': uri,
-    });
+    await _sendRequest('resources/subscribe', {'uri': uri});
   }
 
   /// Unsubscribe from a resource
@@ -438,9 +480,7 @@ class Client {
       throw McpError('Server does not support resources');
     }
 
-    await _sendRequest('resources/unsubscribe', {
-      'uri': uri,
-    });
+    await _sendRequest('resources/unsubscribe', {'uri': uri});
   }
 
   /// List resource templates on the server
@@ -455,7 +495,9 @@ class Client {
 
     final response = await _sendRequest('resources/templates/list', {});
     final templatesList = response['resourceTemplates'] as List<dynamic>;
-    return templatesList.map((template) => ResourceTemplate.fromJson(template)).toList();
+    return templatesList
+        .map((template) => ResourceTemplate.fromJson(template))
+        .toList();
   }
 
   /// List available prompts on the server
@@ -474,7 +516,10 @@ class Client {
   }
 
   /// Get a prompt from the server
-  Future<GetPromptResult> getPrompt(String name, [Map<String, dynamic>? promptArguments]) async {
+  Future<GetPromptResult> getPrompt(
+    String name, [
+    Map<String, dynamic>? promptArguments,
+  ]) async {
     if (!_initialized) {
       throw McpError('Client is not initialized');
     }
@@ -484,9 +529,7 @@ class Client {
     }
 
     // Create a new map to hold params to avoid direct modification
-    final Map<String, dynamic> params = {
-      'name': name,
-    };
+    final Map<String, dynamic> params = {'name': name};
 
     // Only add arguments if provided, and ensure it's a proper Map<String, dynamic>
     if (promptArguments != null) {
@@ -498,7 +541,9 @@ class Client {
   }
 
   /// Request model sampling from the server
-  Future<CreateMessageResult> createMessage(CreateMessageRequest request) async {
+  Future<CreateMessageResult> createMessage(
+    CreateMessageRequest request,
+  ) async {
     if (!_initialized) {
       throw McpError('Client is not initialized');
     }
@@ -507,7 +552,10 @@ class Client {
       throw McpError('Server does not support sampling');
     }
 
-    final response = await _sendRequest('sampling/createMessage', request.toJson());
+    final response = await _sendRequest(
+      McpProtocol.methodComplete,
+      request.toJson(),
+    );
     return CreateMessageResult.fromJson(response);
   }
 
@@ -541,9 +589,7 @@ class Client {
       throw McpError('Client does not support roots');
     }
 
-    await _sendRequest('roots/add', {
-      'root': root.toJson(),
-    });
+    await _sendRequest('roots/add', {'root': root.toJson()});
 
     if (capabilities.rootsListChanged) {
       _sendNotification('notifications/roots/list_changed', {});
@@ -560,9 +606,7 @@ class Client {
       throw McpError('Client does not support roots');
     }
 
-    await _sendRequest('roots/remove', {
-      'uri': uri,
-    });
+    await _sendRequest('roots/remove', {'uri': uri});
 
     if (capabilities.rootsListChanged) {
       _sendNotification('notifications/roots/list_changed', {});
@@ -590,9 +634,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    await _sendRequest('logging/set_level', {
-      'level': level.index,
-    });
+    await _sendRequest('logging/set_level', {'level': level.name});
   }
 
   /// Register a notification handler
@@ -602,17 +644,17 @@ class Client {
 
   /// Handle tools list changed notification
   void onToolsListChanged(Function() handler) {
-    onNotification('notifications/tools/list_changed', (_) => handler());
+    onNotification(McpProtocol.methodToolListChanged, (_) => handler());
   }
 
   /// Handle resources list changed notification
   void onResourcesListChanged(Function() handler) {
-    onNotification('notifications/resources/list_changed', (_) => handler());
+    onNotification(McpProtocol.methodResourceListChanged, (_) => handler());
   }
 
   /// Handle prompts list changed notification
   void onPromptsListChanged(Function() handler) {
-    onNotification('notifications/prompts/list_changed', (_) => handler());
+    onNotification(McpProtocol.methodPromptListChanged, (_) => handler());
   }
 
   /// Handle roots list changed notification
@@ -622,7 +664,7 @@ class Client {
 
   /// Handle resource updated notification
   void onResourceUpdated(Function(String) handler) {
-    onNotification('notifications/resources/updated', (params) {
+    onNotification(McpProtocol.methodResourceUpdated, (params) {
       final uri = params['uri'] as String;
       handler(uri);
     });
@@ -633,8 +675,10 @@ class Client {
   /// The handler will be called with:
   /// [uri] - The URI of the updated resource
   /// [content] - The new content of the resource
-  void onResourceContentUpdated(Function(String uri, ResourceContentInfo content) handler) {
-    onNotification('notifications/resources/updated', (params) {
+  void onResourceContentUpdated(
+    Function(String uri, ResourceContentInfo content) handler,
+  ) {
+    onNotification(McpProtocol.methodResourceUpdated, (params) {
       final uri = params['uri'] as String;
       final contentData = params['content'] as Map<String, dynamic>;
       final content = ResourceContentInfo.fromJson(contentData);
@@ -648,9 +692,12 @@ class Client {
   /// [requestId] - The ID of the request that this progress update relates to
   /// [progress] - A value between 0.0 and 1.0 indicating the progress
   /// [message] - Optional message describing the current progress state
-  void onProgress(Function(String requestId, double progress, String message) handler) {
-    onNotification('progress', (params) {
-      final requestId = params['requestId'] as String? ?? params['request_id'] as String;
+  void onProgress(
+    Function(String requestId, double progress, String message) handler,
+  ) {
+    onNotification(McpProtocol.methodProgress, (params) {
+      final requestId =
+          params['requestId'] as String? ?? params['request_id'] as String;
       final progress = params['progress'] as double;
       final message = params['message'] as String;
       handler(requestId, progress, message);
@@ -662,9 +709,12 @@ class Client {
   /// The handler will be called with:
   /// [requestId] - The ID of the sampling request
   /// [result] - The sampling result from the LLM
-  void onSamplingResponse(Function(String requestId, CreateMessageResult result) handler) {
+  void onSamplingResponse(
+    Function(String requestId, CreateMessageResult result) handler,
+  ) {
     onNotification('sampling/response', (params) {
-      final requestId = params['requestId'] as String? ?? params['request_id'] as String;
+      final requestId =
+          params['requestId'] as String? ?? params['request_id'] as String;
       final resultData = params['result'] as Map<String, dynamic>;
       final result = CreateMessageResult.fromJson(resultData);
       handler(requestId, result);
@@ -672,21 +722,56 @@ class Client {
   }
 
   /// Handle logging notification
-  void onLogging(Function(McpLogLevel, String, String?, Map<String, dynamic>?) handler) {
-    onNotification('logging', (params) {
-      final level = McpLogLevel.values[params['level'] as int];
-      final message = params['message'] as String;
+  void onLogging(
+    Function(McpLogLevel, String, String?, Map<String, dynamic>?) handler,
+  ) {
+    onNotification(McpProtocol.methodLog, (params) {
+      // Parse level as string according to MCP 2025-03-26 spec
+      final levelString = params['level'] as String;
+      final level = _parseLogLevel(levelString);
+
       final logger = params['logger'] as String?;
-      final data = params['data'] as Map<String, dynamic>?;
-      handler(level, message, logger, data);
+
+      // Extract message and additional data from data object according to spec
+      final dataMap = params['data'] as Map<String, dynamic>?;
+      final message = dataMap?['message'] as String? ?? '';
+
+      handler(level, message, logger, dataMap);
     });
+  }
+
+  /// Parse log level string to enum value
+  McpLogLevel _parseLogLevel(String levelString) {
+    switch (levelString.toLowerCase()) {
+      case 'debug':
+        return McpLogLevel.debug;
+      case 'info':
+        return McpLogLevel.info;
+      case 'notice':
+        return McpLogLevel.notice;
+      case 'warning':
+        return McpLogLevel.warning;
+      case 'error':
+        return McpLogLevel.error;
+      case 'critical':
+        return McpLogLevel.critical;
+      case 'alert':
+        return McpLogLevel.alert;
+      case 'emergency':
+        return McpLogLevel.emergency;
+      default:
+        return McpLogLevel.info; // fallback to info level
+    }
   }
 
   /// Disconnect the client from its transport
   void disconnect() {
     if (_transport != null) {
       _disconnectStreamController.add(DisconnectReason.clientDisconnected);
-      _transport!.close();
+      final transport = _transport;
+      _transport =
+          null; // Clear reference before closing to avoid double events
+      transport!.close();
       _onDisconnect();
     }
   }
@@ -772,7 +857,9 @@ class Client {
         handler(params);
       } catch (e) {
         _logger.debug('Error in notification handler: $e');
-        _errorStreamController.add(McpError('Error in notification handler: $e'));
+        _errorStreamController.add(
+          McpError('Error in notification handler: $e'),
+        );
       }
     } else {
       _logger.debug('No handler for notification: $method');
@@ -780,7 +867,10 @@ class Client {
   }
 
   /// Send a JSON-RPC request
-  Future<dynamic> _sendRequest(String method, Map<String, dynamic> params) async {
+  Future<dynamic> _sendRequest(
+    String method,
+    Map<String, dynamic> params,
+  ) async {
     if (!isConnected) {
       throw McpError('Client is not connected to a transport');
     }
@@ -793,7 +883,7 @@ class Client {
     final Map<String, dynamic> safeParams = Map<String, dynamic>.from(params);
 
     final request = {
-      'jsonrpc': '2.0',
+      'jsonrpc': McpProtocol.jsonRpcVersion,
       'id': id,
       'method': method,
       'params': safeParams,
@@ -837,36 +927,13 @@ class Client {
     }
 
     final notification = {
-      'jsonrpc': '2.0',
+      'jsonrpc': McpProtocol.jsonRpcVersion,
       'method': method,
       'params': params,
     };
 
     _transport!.send(notification);
   }
-}
-
-/// Represents server information
-class ServerInfo {
-  /// Server name
-  final String name;
-
-  /// Server version
-  final String version;
-
-  /// Server capabilities
-  final ServerCapabilities capabilities;
-
-  /// Protocol version being used
-  final String protocolVersion;
-
-  /// Creates a new server info
-  ServerInfo({
-    required this.name,
-    required this.version,
-    required this.capabilities,
-    required this.protocolVersion,
-  });
 }
 
 /// Reason for disconnection
@@ -890,93 +957,6 @@ enum DisconnectReason {
   unknown,
 }
 
-/// Client capabilities configuration
-class ClientCapabilities {
-  /// Root management support
-  final bool roots;
-
-  /// Whether roots list changes are sent as notifications
-  final bool rootsListChanged;
-
-  /// Sampling support
-  final bool sampling;
-
-  /// Create a capabilities object with specified settings
-  const ClientCapabilities({
-    this.roots = false,
-    this.rootsListChanged = false,
-    this.sampling = false,
-  });
-
-  /// Convert capabilities to JSON
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{};
-
-    if (roots) {
-      result['roots'] = {'listChanged': rootsListChanged};
-    }
-
-    if (sampling) {
-      result['sampling'] = {};
-    }
-
-    return result;
-  }
-}
-
-/// Server capabilities
-class ServerCapabilities {
-  /// Tool support
-  final bool tools;
-
-  /// Whether tools list changes are sent as notifications
-  final bool toolsListChanged;
-
-  /// Resource support
-  final bool resources;
-
-  /// Whether resources list changes are sent as notifications
-  final bool resourcesListChanged;
-
-  /// Prompt support
-  final bool prompts;
-
-  /// Whether prompts list changes are sent as notifications
-  final bool promptsListChanged;
-
-  /// Sampling support
-  final bool sampling;
-
-  /// Server capabilities from JSON
-  factory ServerCapabilities.fromJson(Map<String, dynamic> json) {
-    final toolsData = json['tools'] as Map<String, dynamic>?;
-    final resourcesData = json['resources'] as Map<String, dynamic>?;
-    final promptsData = json['prompts'] as Map<String, dynamic>?;
-    final samplingData = json['sampling'] as Map<String, dynamic>?;
-
-    return ServerCapabilities(
-      tools: toolsData != null,
-      toolsListChanged: toolsData?['listChanged'] == true,
-      resources: resourcesData != null,
-      resourcesListChanged: resourcesData?['listChanged'] == true,
-      prompts: promptsData != null,
-      promptsListChanged: promptsData?['listChanged'] == true,
-      sampling: samplingData != null,
-    );
-  }
-
-  /// Create server capabilities object
-  const ServerCapabilities({
-    this.tools = false,
-    this.toolsListChanged = false,
-    this.resources = false,
-    this.resourcesListChanged = false,
-    this.prompts = false,
-    this.promptsListChanged = false,
-    this.sampling = false,
-  });
-}
-
 /// Class to hold result of a tracked tool call
 class ToolCallTracking {
   /// Operation ID for tracking progress
@@ -985,8 +965,5 @@ class ToolCallTracking {
   /// Result of the tool call
   final CallToolResult result;
 
-  ToolCallTracking({
-    this.operationId,
-    required this.result,
-  });
+  ToolCallTracking({this.operationId, required this.result});
 }

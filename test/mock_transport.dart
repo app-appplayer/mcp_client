@@ -11,6 +11,9 @@ class MockTransport implements ClientTransport {
   final sentMessages = <Map<String, dynamic>>[];
   bool _closed = false;
 
+  /// Optional callback for custom send handling
+  void Function(dynamic)? onSend;
+
   /// Queue a response to be sent when a request is received
   void queueResponse(Map<String, dynamic> response) {
     _responseQueue.add(response);
@@ -33,6 +36,11 @@ class MockTransport implements ClientTransport {
   void send(dynamic message) {
     if (_closed) {
       throw McpError('Transport is closed');
+    }
+
+    // Call custom handler if provided
+    if (onSend != null) {
+      onSend!(message);
     }
 
     // Store the sent message for later inspection

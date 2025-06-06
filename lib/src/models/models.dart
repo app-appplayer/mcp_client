@@ -1,90 +1,83 @@
+import 'package:meta/meta.dart';
+
 /// Base content type enum for MCP
-enum MessageRole {
-  user,
-  assistant,
-  system,
+enum MessageRole { user, assistant, system }
+
+enum MCPContentType { text, image, resource }
+
+/// Log levels for MCP protocol
+enum McpLogLevel {
+  debug, // 0
+  info, // 1
+  notice, // 2
+  warning, // 3
+  error, // 4
+  critical, // 5
+  alert, // 6
+  emergency, // 7
 }
 
-enum MCPContentType {
-  text,
-  image,
-  resource,
-}
-
-/// Base class for all MCP content types
+/// Base class for all MCP content types (2025-03-26 compliant)
+@immutable
 abstract class Content {
-  final MCPContentType type;
-
-  Content(this.type);
+  const Content();
 
   Map<String, dynamic> toJson();
 
-  // Factory constructor for creating content from JSON
-  static Content fromJson(Map<String, dynamic> json) {
-    final contentType = json['type'] as String?;
-
-    switch (contentType) {
-      case 'text':
-        return TextContent(text: json['text'] as String);
-      case 'image':
-        return ImageContent(
-          url: json['url'] as String?,
-          data: json['data'] as String?,
-          mimeType: json['mimeType'] as String,
-        );
-      case 'resource':
-        final resource = ResourceContent(
-          uri: json['uri'] as String,
-          text: json['text'] as String?,
-          blob: json['blob'] as String?,
-          mimeType: json['mimeType'] as String?,
-        );
-        return resource;
-      default:
-        throw FormatException('Unknown content type: $contentType');
-    }
+  factory Content.fromJson(Map<String, dynamic> json) {
+    final type = json['type'] as String;
+    return switch (type) {
+      'text' => TextContent.fromJson(json),
+      'image' => ImageContent.fromJson(json),
+      'resource' => ResourceContent.fromJson(json),
+      _ => throw ArgumentError('Unknown content type: $type'),
+    };
   }
 }
 
 /// Text content representation
+@immutable
 class TextContent extends Content {
   final String text;
+  final Map<String, dynamic>? annotations;
 
-  TextContent({required this.text}) : super(MCPContentType.text);
+  const TextContent({required this.text, this.annotations});
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'type': 'text',
-      'text': text,
-    };
+    final json = <String, dynamic>{'type': 'text', 'text': text};
+    if (annotations != null) json['annotations'] = annotations!;
+    return json;
   }
 
   factory TextContent.fromJson(Map<String, dynamic> json) {
-    return TextContent(text: json['text'] as String);
+    return TextContent(
+      text: json['text'] as String,
+      annotations: json['annotations'] as Map<String, dynamic>?,
+    );
   }
 }
 
 /// Image content representation
+@immutable
 class ImageContent extends Content {
   final String? url;
   final String? data;
   final String mimeType;
+  final Map<String, dynamic>? annotations;
 
-  ImageContent({
+  const ImageContent({
     this.url,
     this.data,
     required this.mimeType,
-  }) : super(MCPContentType.image);
+    this.annotations,
+  });
 
   factory ImageContent.fromBase64({
     required String data,
     required String mimeType,
   }) {
-    return ImageContent(
-      data: data,
-      mimeType: mimeType,
-    );
+    return ImageContent(data: data, mimeType: mimeType);
   }
 
   factory ImageContent.fromJson(Map<String, dynamic> json) {
@@ -92,117 +85,132 @@ class ImageContent extends Content {
       url: json['url'] as String?,
       data: json['data'] as String?,
       mimeType: json['mimeType'] as String,
+      annotations: json['annotations'] as Map<String, dynamic>?,
     );
   }
 
   @override
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
-      'type': 'image',
-      'mimeType': mimeType,
-    };
+    final json = <String, dynamic>{'type': 'image', 'mimeType': mimeType};
 
-    if (url != null) {
-      result['url'] = url;
-    }
-
+    // 2025 spec uses 'data' for base64, but maintain 'url' for compatibility
     if (data != null) {
-      result['data'] = data;
+      json['data'] = data!;
+    } else if (url != null) {
+      json['url'] = url!;
     }
 
-    return result;
+    if (annotations != null) json['annotations'] = annotations!;
+    return json;
   }
 }
 
 /// Resource content representation
+@immutable
 class ResourceContent extends Content {
   final String uri;
   final String? text;
   final String? blob;
   final String? mimeType;
-  final Map<String, dynamic>? uriTemplate;
+  final Map<String, dynamic>? annotations;
 
-  ResourceContent({
+  const ResourceContent({
     required this.uri,
     this.text,
     this.blob,
     this.mimeType,
-    this.uriTemplate,
-  }) : super(MCPContentType.resource);
-
-  factory ResourceContent.fromJson(Map<String, dynamic> json) {
-    return ResourceContent(
-      uri: json['uri'] as String,
-      text: json['text'] as String?,
-      blob: json['blob'] as String?,
-      mimeType: json['mimeType'] as String?,
-      uriTemplate: json['uriTemplate'] as Map<String, dynamic>?,
-    );
-  }
+    this.annotations,
+  });
 
   @override
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
-      'type': 'resource',
-      'uri': uri,
-    };
+    final resource = <String, dynamic>{'uri': uri};
+    if (text != null) resource['text'] = text!;
+    if (blob != null) resource['blob'] = blob!;
+    if (mimeType != null) resource['mimeType'] = mimeType!;
 
-    if (text != null) {
-      result['text'] = text;
+    final json = <String, dynamic>{'type': 'resource', 'resource': resource};
+    if (annotations != null) json['annotations'] = annotations!;
+    return json;
+  }
+
+  factory ResourceContent.fromJson(Map<String, dynamic> json) {
+    // Handle both 2025 format (nested) and older format (flat)
+    final resource = json['resource'] as Map<String, dynamic>?;
+    if (resource != null) {
+      // 2025 format with nested resource
+      return ResourceContent(
+        uri: resource['uri'] as String,
+        text: resource['text'] as String?,
+        blob: resource['blob'] as String?,
+        mimeType: resource['mimeType'] as String?,
+        annotations: json['annotations'] as Map<String, dynamic>?,
+      );
+    } else {
+      // Older flat format
+      return ResourceContent(
+        uri: json['uri'] as String,
+        text: json['text'] as String?,
+        blob: json['blob'] as String?,
+        mimeType: json['mimeType'] as String?,
+        annotations: json['annotations'] as Map<String, dynamic>?,
+      );
     }
-
-    if (blob != null) {
-      result['blob'] = blob;
-    }
-
-    if (mimeType != null) {
-      result['mimeType'] = mimeType;
-    }
-
-    return result;
   }
 }
 
-/// Tool definition
+/// Tool definition (2025-03-26 compliant)
+@immutable
 class Tool {
   final String name;
   final String description;
   final Map<String, dynamic> inputSchema;
+  final bool? supportsProgress;
+  final bool? supportsCancellation;
+  final Map<String, dynamic>? metadata;
 
-  Tool({
+  const Tool({
     required this.name,
     required this.description,
     required this.inputSchema,
+    this.supportsProgress,
+    this.supportsCancellation,
+    this.metadata,
   });
 
   Map<String, dynamic> toJson() {
-    return {
+    final json = <String, dynamic>{
       'name': name,
       'description': description,
       'inputSchema': inputSchema,
     };
+    if (supportsProgress == true) json['supportsProgress'] = supportsProgress;
+    if (supportsCancellation == true)
+      json['supportsCancellation'] = supportsCancellation;
+    if (metadata != null) json['metadata'] = metadata!;
+    return json;
   }
 
   factory Tool.fromJson(Map<String, dynamic> json) {
     return Tool(
       name: json['name'] as String,
-      description: (json['description'] ?? '') as String,
-      inputSchema: (json['inputSchema'] as Map<dynamic, dynamic>).cast<String, dynamic>(),
+      description: json['description'] as String,
+      inputSchema: json['inputSchema'] as Map<String, dynamic>,
+      supportsProgress: json['supportsProgress'] as bool?,
+      supportsCancellation: json['supportsCancellation'] as bool?,
+      metadata: json['metadata'] as Map<String, dynamic>?,
     );
   }
 }
 
 /// Tool call result
+@immutable
 class CallToolResult {
   final List<Content> content;
   final bool isStreaming;
   final bool? isError;
 
-  CallToolResult(
-      this.content, {
-        this.isStreaming = false,
-        this.isError,
-      });
+  const CallToolResult(this.content, {this.isStreaming = false, this.isError});
 
   Map<String, dynamic> toJson() {
     return {
@@ -214,10 +222,11 @@ class CallToolResult {
 
   factory CallToolResult.fromJson(Map<String, dynamic> json) {
     final List<dynamic> contentList = json['content'] as List<dynamic>? ?? [];
-    final List<Content> contents = contentList.map((contentData) {
-      final contentMap = contentData as Map<String, dynamic>;
-      return Content.fromJson(contentMap);
-    }).toList();
+    final List<Content> contents =
+        contentList.map((contentData) {
+          final contentMap = contentData as Map<String, dynamic>;
+          return Content.fromJson(contentMap);
+        }).toList();
 
     return CallToolResult(
       contents,
@@ -228,58 +237,53 @@ class CallToolResult {
 }
 
 /// Resource definition
+@immutable
 class Resource {
   final String uri;
   final String name;
   final String description;
   final String? mimeType;
-  final Map<String, dynamic>? uriTemplate;
+  final Map<String, dynamic>? metadata;
 
-  Resource({
+  const Resource({
     required this.uri,
     required this.name,
     required this.description,
     this.mimeType,
-    this.uriTemplate,
+    this.metadata,
   });
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
+    final json = <String, dynamic>{
       'uri': uri,
       'name': name,
       'description': description,
     };
-
-    if (mimeType != null) {
-      result['mimeType'] = mimeType;
-    }
-
-    if (uriTemplate != null) {
-      result['uriTemplate'] = uriTemplate;
-    }
-
-    return result;
+    if (mimeType != null) json['mimeType'] = mimeType;
+    if (metadata != null) json['metadata'] = metadata!;
+    return json;
   }
 
   factory Resource.fromJson(Map<String, dynamic> json) {
     return Resource(
       uri: json['uri'] as String,
       name: json['name'] as String,
-      description: (json['description'] ?? '') as String,
+      description: json['description'] as String,
       mimeType: json['mimeType'] as String?,
-      uriTemplate: json['uriTemplate'] as Map<String, dynamic>?,
+      metadata: json['metadata'] as Map<String, dynamic>?,
     );
   }
 }
 
 /// Resource template definition
+@immutable
 class ResourceTemplate {
   final String uriTemplate;
   final String name;
   final String description;
   final String? mimeType;
 
-  ResourceTemplate({
+  const ResourceTemplate({
     required this.uriTemplate,
     required this.name,
     required this.description,
@@ -287,16 +291,14 @@ class ResourceTemplate {
   });
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
+    final result = <String, dynamic>{
       'uriTemplate': uriTemplate,
       'name': name,
       'description': description,
     };
-
     if (mimeType != null) {
       result['mimeType'] = mimeType;
     }
-
     return result;
   }
 
@@ -304,20 +306,21 @@ class ResourceTemplate {
     return ResourceTemplate(
       uriTemplate: json['uriTemplate'] as String,
       name: json['name'] as String,
-      description: (json['description'] ?? '') as String,
+      description: json['description'] as String,
       mimeType: json['mimeType'] as String?,
     );
   }
 }
 
 /// Resource content
+@immutable
 class ResourceContentInfo {
   final String uri;
   final String? mimeType;
   final String? text;
   final String? blob;
 
-  ResourceContentInfo({
+  const ResourceContentInfo({
     required this.uri,
     this.mimeType,
     this.text,
@@ -325,20 +328,10 @@ class ResourceContentInfo {
   });
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {'uri': uri};
-
-    if (mimeType != null) {
-      result['mimeType'] = mimeType;
-    }
-
-    if (text != null) {
-      result['text'] = text;
-    }
-
-    if (blob != null) {
-      result['blob'] = blob;
-    }
-
+    final result = <String, dynamic>{'uri': uri};
+    if (mimeType != null) result['mimeType'] = mimeType;
+    if (text != null) result['text'] = text;
+    if (blob != null) result['blob'] = blob;
     return result;
   }
 
@@ -353,61 +346,60 @@ class ResourceContentInfo {
 }
 
 /// Resource read result
+@immutable
 class ReadResourceResult {
   final List<ResourceContentInfo> contents;
 
-  ReadResourceResult({
-    required this.contents,
-  });
+  const ReadResourceResult({required this.contents});
 
   Map<String, dynamic> toJson() {
-    return {
-      'contents': contents.map((c) => c.toJson()).toList(),
-    };
+    return {'contents': contents.map((c) => c.toJson()).toList()};
   }
 
   factory ReadResourceResult.fromJson(Map<String, dynamic> json) {
     final List<dynamic> contentsList = json['contents'] as List<dynamic>? ?? [];
-    final contents = contentsList
-        .map((content) => ResourceContentInfo.fromJson(content as Map<String, dynamic>))
-        .toList();
+    final contents =
+        contentsList
+            .map(
+              (content) =>
+                  ResourceContentInfo.fromJson(content as Map<String, dynamic>),
+            )
+            .toList();
 
     return ReadResourceResult(contents: contents);
   }
 }
 
 /// Prompt argument definition
+@immutable
 class PromptArgument {
   final String name;
-  final String description;
+  final String? description;
   final bool required;
   final String? defaultValue;
 
-  PromptArgument({
+  const PromptArgument({
     required this.name,
-    required this.description,
+    this.description,
     this.required = false,
     this.defaultValue,
   });
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
-      'name': name,
-      'description': description,
-      'required': required,
-    };
-
-    if (defaultValue != null) {
-      result['default'] = defaultValue;
+    final result = <String, dynamic>{'name': name, 'required': required};
+    if (description != null) {
+      result['description'] = description!;
     }
-
+    if (defaultValue != null) {
+      result['default'] = defaultValue as Object;
+    }
     return result;
   }
 
   factory PromptArgument.fromJson(Map<String, dynamic> json) {
     return PromptArgument(
       name: json['name'] as String,
-      description: (json['description'] ?? '') as String,
+      description: json['description'] as String?,
       required: json['required'] as bool? ?? false,
       defaultValue: json['default'] as String?,
     );
@@ -415,54 +407,56 @@ class PromptArgument {
 }
 
 /// Prompt definition
+@immutable
 class Prompt {
   final String name;
-  final String description;
+  final String? description;
   final List<PromptArgument> arguments;
+  final Map<String, dynamic>? metadata;
 
-  Prompt({
+  const Prompt({
     required this.name,
-    required this.description,
+    this.description,
     required this.arguments,
+    this.metadata,
   });
 
   Map<String, dynamic> toJson() {
-    return {
+    final json = <String, dynamic>{
       'name': name,
-      'description': description,
       'arguments': arguments.map((arg) => arg.toJson()).toList(),
     };
+    if (description != null) json['description'] = description!;
+    if (metadata != null) json['metadata'] = metadata!;
+    return json;
   }
 
   factory Prompt.fromJson(Map<String, dynamic> json) {
     final List<dynamic> argsList = json['arguments'] as List<dynamic>? ?? [];
-    final arguments = argsList
-        .map((arg) => PromptArgument.fromJson(arg as Map<String, dynamic>))
-        .toList();
+    final arguments =
+        argsList
+            .map((arg) => PromptArgument.fromJson(arg as Map<String, dynamic>))
+            .toList();
 
     return Prompt(
       name: json['name'] as String,
-      description: (json['description'] ?? '') as String,
+      description: json['description'] as String?,
       arguments: arguments,
+      metadata: json['metadata'] as Map<String, dynamic>?,
     );
   }
 }
 
 /// Message model for prompt system
+@immutable
 class Message {
   final String role;
   final Content content;
 
-  Message({
-    required this.role,
-    required this.content,
-  });
+  const Message({required this.role, required this.content});
 
   Map<String, dynamic> toJson() {
-    return {
-      'role': role,
-      'content': content.toJson(),
-    };
+    return {'role': role, 'content': content.toJson()};
   }
 
   factory Message.fromJson(Map<String, dynamic> json) {
@@ -476,32 +470,27 @@ class Message {
 }
 
 /// Get prompt result
+@immutable
 class GetPromptResult {
   final String? description;
   final List<Message> messages;
 
-  GetPromptResult({
-    this.description,
-    required this.messages,
-  });
+  const GetPromptResult({this.description, required this.messages});
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
+    final result = <String, dynamic>{
       'messages': messages.map((m) => m.toJson()).toList(),
     };
-
-    if (description != null) {
-      result['description'] = description;
-    }
-
+    if (description != null) result['description'] = description!;
     return result;
   }
 
   factory GetPromptResult.fromJson(Map<String, dynamic> json) {
     final List<dynamic> messagesList = json['messages'] as List<dynamic>? ?? [];
-    final messages = messagesList
-        .map((message) => Message.fromJson(message as Map<String, dynamic>))
-        .toList();
+    final messages =
+        messagesList
+            .map((message) => Message.fromJson(message as Map<String, dynamic>))
+            .toList();
 
     return GetPromptResult(
       description: json['description'] as String?,
@@ -511,17 +500,15 @@ class GetPromptResult {
 }
 
 /// Model hint for sampling
+@immutable
 class ModelHint {
   final String name;
   final double? weight;
 
-  ModelHint({
-    required this.name,
-    this.weight,
-  });
+  const ModelHint({required this.name, this.weight});
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {'name': name};
+    final result = <String, dynamic>{'name': name};
     if (weight != null) {
       result['weight'] = weight;
     }
@@ -531,19 +518,21 @@ class ModelHint {
   factory ModelHint.fromJson(Map<String, dynamic> json) {
     return ModelHint(
       name: json['name'] as String,
-      weight: json['weight'] as double?,
+      weight:
+          json['weight'] != null ? (json['weight'] as num).toDouble() : null,
     );
   }
 }
 
 /// Model preferences for sampling
+@immutable
 class ModelPreferences {
   final List<ModelHint>? hints;
   final double? costPriority;
   final double? speedPriority;
   final double? intelligencePriority;
 
-  ModelPreferences({
+  const ModelPreferences({
     this.hints,
     this.costPriority,
     this.speedPriority,
@@ -551,43 +540,49 @@ class ModelPreferences {
   });
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = <String, dynamic>{};
-
+    final result = <String, dynamic>{};
     if (hints != null && hints!.isNotEmpty) {
       result['hints'] = hints!.map((h) => h.toJson()).toList();
     }
-
     if (costPriority != null) {
       result['costPriority'] = costPriority;
     }
-
     if (speedPriority != null) {
       result['speedPriority'] = speedPriority;
     }
-
     if (intelligencePriority != null) {
       result['intelligencePriority'] = intelligencePriority;
     }
-
     return result;
   }
 
   factory ModelPreferences.fromJson(Map<String, dynamic> json) {
     final List<dynamic>? hintsList = json['hints'] as List<dynamic>?;
-    final hints = hintsList
-        ?.map((hint) => ModelHint.fromJson(hint as Map<String, dynamic>))
-        .toList();
+    final hints =
+        hintsList
+            ?.map((hint) => ModelHint.fromJson(hint as Map<String, dynamic>))
+            .toList();
 
     return ModelPreferences(
       hints: hints,
-      costPriority: json['costPriority'] as double?,
-      speedPriority: json['speedPriority'] as double?,
-      intelligencePriority: json['intelligencePriority'] as double?,
+      costPriority:
+          json['costPriority'] != null
+              ? (json['costPriority'] as num).toDouble()
+              : null,
+      speedPriority:
+          json['speedPriority'] != null
+              ? (json['speedPriority'] as num).toDouble()
+              : null,
+      intelligencePriority:
+          json['intelligencePriority'] != null
+              ? (json['intelligencePriority'] as num).toDouble()
+              : null,
     );
   }
 }
 
 /// Create message request for sampling
+@immutable
 class CreateMessageRequest {
   final List<Message> messages;
   final ModelPreferences? modelPreferences;
@@ -598,7 +593,7 @@ class CreateMessageRequest {
   final List<String>? stopSequences;
   final Map<String, dynamic>? metadata;
 
-  CreateMessageRequest({
+  const CreateMessageRequest({
     required this.messages,
     this.modelPreferences,
     this.systemPrompt,
@@ -610,78 +605,79 @@ class CreateMessageRequest {
   });
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
+    final result = <String, dynamic>{
       'messages': messages.map((m) => m.toJson()).toList(),
     };
-
     if (modelPreferences != null) {
       result['modelPreferences'] = modelPreferences!.toJson();
     }
-
     if (systemPrompt != null) {
       result['systemPrompt'] = systemPrompt;
     }
-
     if (includeContext != null) {
       result['includeContext'] = includeContext;
     }
-
     if (maxTokens != null) {
       result['maxTokens'] = maxTokens;
     }
-
     if (temperature != null) {
       result['temperature'] = temperature;
     }
-
     if (stopSequences != null && stopSequences!.isNotEmpty) {
       result['stopSequences'] = stopSequences;
     }
-
     if (metadata != null && metadata!.isNotEmpty) {
       result['metadata'] = Map<String, dynamic>.from(metadata!);
     }
-
     return result;
   }
 
   factory CreateMessageRequest.fromJson(Map<String, dynamic> json) {
     final List<dynamic> messagesList = json['messages'] as List<dynamic>? ?? [];
-    final messages = messagesList
-        .map((message) => Message.fromJson(message as Map<String, dynamic>))
-        .toList();
+    final messages =
+        messagesList
+            .map((message) => Message.fromJson(message as Map<String, dynamic>))
+            .toList();
 
-    // 추출 및 변환
-    final List<dynamic>? stopSequencesList = json['stopSequences'] as List<dynamic>?;
-    final stopSequences = stopSequencesList
-        ?.map((sequence) => sequence as String)
-        .toList();
+    final List<dynamic>? stopSequencesList =
+        json['stopSequences'] as List<dynamic>?;
+    final stopSequences =
+        stopSequencesList?.map((sequence) => sequence as String).toList();
 
     return CreateMessageRequest(
       messages: messages,
-      modelPreferences: json['modelPreferences'] != null
-          ? ModelPreferences.fromJson(json['modelPreferences'] as Map<String, dynamic>)
-          : null,
+      modelPreferences:
+          json['modelPreferences'] != null
+              ? ModelPreferences.fromJson(
+                json['modelPreferences'] as Map<String, dynamic>,
+              )
+              : null,
       systemPrompt: json['systemPrompt'] as String?,
       includeContext: json['includeContext'] as String?,
       maxTokens: json['maxTokens'] as int?,
-      temperature: json['temperature'] as double?,
+      temperature:
+          json['temperature'] != null
+              ? (json['temperature'] as num).toDouble()
+              : null,
       stopSequences: stopSequences,
-      metadata: json['metadata'] != null
-          ? (json['metadata'] as Map<dynamic, dynamic>).cast<String, dynamic>()
-          : null,
+      metadata:
+          json['metadata'] != null
+              ? (json['metadata'] as Map<dynamic, dynamic>)
+                  .cast<String, dynamic>()
+              : null,
     );
   }
 }
 
 /// Create message result from sampling
+@immutable
 class CreateMessageResult {
   final String model;
   final String? stopReason;
   final String role;
   final Content content;
 
-  CreateMessageResult({
+  const CreateMessageResult({
     required this.model,
     this.stopReason,
     required this.role,
@@ -689,16 +685,14 @@ class CreateMessageResult {
   });
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
+    final result = <String, dynamic>{
       'model': model,
       'role': role,
       'content': content.toJson(),
     };
-
     if (stopReason != null) {
       result['stopReason'] = stopReason;
     }
-
     return result;
   }
 
@@ -715,27 +709,19 @@ class CreateMessageResult {
 }
 
 /// Root definition for filesystem access
+@immutable
 class Root {
   final String uri;
   final String name;
   final String? description;
 
-  Root({
-    required this.uri,
-    required this.name,
-    this.description,
-  });
+  const Root({required this.uri, required this.name, this.description});
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> result = {
-      'uri': uri,
-      'name': name,
-    };
-
+    final result = <String, dynamic>{'uri': uri, 'name': name};
     if (description != null) {
       result['description'] = description;
     }
-
     return result;
   }
 
@@ -749,17 +735,19 @@ class Root {
 }
 
 /// Error class for MCP-related errors
+@immutable
 class McpError implements Exception {
   final String message;
   final int? code;
 
-  McpError(this.message, {this.code});
+  const McpError(this.message, {this.code});
 
   @override
   String toString() => 'McpError ${code != null ? '($code)' : ''}: $message';
 }
 
 /// JSON-RPC message
+@immutable
 class JsonRpcMessage {
   final String jsonrpc;
   final dynamic id;
@@ -772,7 +760,7 @@ class JsonRpcMessage {
   bool get isRequest => id != null && method != null;
   bool get isResponse => id != null && (result != null || error != null);
 
-  JsonRpcMessage({
+  const JsonRpcMessage({
     required this.jsonrpc,
     this.id,
     this.method,
@@ -786,9 +774,12 @@ class JsonRpcMessage {
     Map<String, dynamic>? params;
     if (json['params'] != null) {
       if (json['params'] is Map) {
-        params = (json['params'] as Map<dynamic, dynamic>).cast<String, dynamic>();
+        params =
+            (json['params'] as Map<dynamic, dynamic>).cast<String, dynamic>();
       } else {
-        throw FormatException('Invalid params: expected a Map, got ${json['params'].runtimeType}');
+        throw FormatException(
+          'Invalid params: expected a Map, got ${json['params'].runtimeType}',
+        );
       }
     }
 
@@ -796,9 +787,12 @@ class JsonRpcMessage {
     Map<String, dynamic>? error;
     if (json['error'] != null) {
       if (json['error'] is Map) {
-        error = (json['error'] as Map<dynamic, dynamic>).cast<String, dynamic>();
+        error =
+            (json['error'] as Map<dynamic, dynamic>).cast<String, dynamic>();
       } else {
-        throw FormatException('Invalid error: expected a Map, got ${json['error'].runtimeType}');
+        throw FormatException(
+          'Invalid error: expected a Map, got ${json['error'].runtimeType}',
+        );
       }
     }
 
@@ -813,34 +807,28 @@ class JsonRpcMessage {
   }
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> json = {'jsonrpc': jsonrpc};
-
-    if (id != null) {
-      json['id'] = id;
-    }
-
-    if (method != null) {
-      json['method'] = method;
-    }
-
-    if (params != null) {
-      json['params'] = params;
-    }
-
-    if (result != null) {
-      json['result'] = result;
-    }
-
-    if (error != null) {
-      json['error'] = error;
-    }
-
+    final json = <String, dynamic>{'jsonrpc': jsonrpc};
+    if (id != null) json['id'] = id;
+    if (method != null) json['method'] = method!;
+    if (params != null) json['params'] = params!;
+    if (result != null) json['result'] = result;
+    if (error != null) json['error'] = error!;
     return json;
   }
 }
 
 /// Server health information
+@immutable
 class ServerHealth {
+  /// Health status (e.g., 'healthy', 'degraded', 'unhealthy')
+  final String status;
+
+  /// Server version
+  final String? version;
+
+  /// Number of active connections
+  final int connections;
+
   /// Whether the server is running
   final bool isRunning;
 
@@ -865,7 +853,10 @@ class ServerHealth {
   /// Detailed performance metrics
   final Map<String, dynamic> metrics;
 
-  ServerHealth({
+  const ServerHealth({
+    this.status = 'healthy',
+    this.version,
+    this.connections = 0,
     required this.isRunning,
     required this.connectedSessions,
     required this.registeredTools,
@@ -878,14 +869,23 @@ class ServerHealth {
 
   factory ServerHealth.fromJson(Map<String, dynamic> json) {
     return ServerHealth(
-      isRunning: json['isRunning'] as bool,
-      connectedSessions: json['connectedSessions'] as int,
-      registeredTools: json['registeredTools'] as int,
-      registeredResources: json['registeredResources'] as int,
-      registeredPrompts: json['registeredPrompts'] as int,
-      startTime: DateTime.parse(json['startTime'] as String),
-      uptime: Duration(seconds: json['uptimeSeconds'] as int),
-      metrics: json['metrics'] as Map<String, dynamic>,
+      status: json['status'] as String? ?? 'healthy',
+      version: json['version'] as String?,
+      connections: json['connections'] as int? ?? 0,
+      isRunning: json['isRunning'] as bool? ?? true,
+      connectedSessions: json['connectedSessions'] as int? ?? 0,
+      registeredTools: json['registeredTools'] as int? ?? 0,
+      registeredResources: json['registeredResources'] as int? ?? 0,
+      registeredPrompts: json['registeredPrompts'] as int? ?? 0,
+      startTime:
+          json['startTime'] != null
+              ? DateTime.parse(json['startTime'] as String)
+              : DateTime.now(),
+      uptime:
+          json['uptimeSeconds'] != null
+              ? Duration(seconds: json['uptimeSeconds'] as int)
+              : Duration.zero,
+      metrics: json['metrics'] as Map<String, dynamic>? ?? {},
     );
   }
 
@@ -927,8 +927,9 @@ class PendingOperation {
     required this.id,
     required this.sessionId,
     required this.type,
+    required this.createdAt,
     this.requestId,
-  }) : createdAt = DateTime.now();
+  });
 
   Map<String, dynamic> toJson() {
     return {
@@ -946,16 +947,16 @@ class PendingOperation {
       id: json['id'] as String,
       sessionId: json['sessionId'] as String,
       type: json['type'] as String,
+      createdAt: DateTime.parse(json['createdAt'] as String),
       requestId: json['requestId'] as String?,
     );
-
     operation.isCancelled = json['isCancelled'] as bool? ?? false;
-
     return operation;
   }
 }
 
 /// Progress update for long-running operations
+@immutable
 class ProgressUpdate {
   /// ID of the request this progress relates to
   final String requestId;
@@ -966,7 +967,7 @@ class ProgressUpdate {
   /// Optional message describing the current status
   final String message;
 
-  ProgressUpdate({
+  const ProgressUpdate({
     required this.requestId,
     required this.progress,
     required this.message,
@@ -975,21 +976,18 @@ class ProgressUpdate {
   factory ProgressUpdate.fromJson(Map<String, dynamic> json) {
     return ProgressUpdate(
       requestId: json['requestId'] as String,
-      progress: json['progress'] as double,
+      progress: (json['progress'] as num).toDouble(),
       message: json['message'] as String,
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'requestId': requestId,
-      'progress': progress,
-      'message': message,
-    };
+    return {'requestId': requestId, 'progress': progress, 'message': message};
   }
 }
 
 /// Cached resource item for performance optimization
+@immutable
 class CachedResource {
   /// URI of the cached resource
   final String uri;
@@ -1003,7 +1001,7 @@ class CachedResource {
   /// How long the cache should be valid
   final Duration maxAge;
 
-  CachedResource({
+  const CachedResource({
     required this.uri,
     required this.content,
     required this.cachedAt,
@@ -1027,14 +1025,612 @@ class CachedResource {
   }
 }
 
-/// Logging levels for MCP protocol
-enum McpLogLevel {
-  debug,
-  info,
-  notice,
-  warning,
-  error,
-  critical,
-  alert,
-  emergency
+/// Server information (2025-03-26 compliant)
+@immutable
+class ServerInfo {
+  final String name;
+  final String version;
+  final String? protocolVersion;
+  final Map<String, dynamic>? capabilities;
+  final Map<String, dynamic>? metadata;
+
+  const ServerInfo({
+    required this.name,
+    required this.version,
+    this.protocolVersion,
+    this.capabilities,
+    this.metadata,
+  });
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{'name': name, 'version': version};
+    if (protocolVersion != null) json['protocolVersion'] = protocolVersion!;
+    if (capabilities != null) json['capabilities'] = capabilities!;
+    if (metadata != null) json['metadata'] = metadata!;
+    return json;
+  }
+
+  factory ServerInfo.fromJson(Map<String, dynamic> json) {
+    return ServerInfo(
+      name: json['name'] as String,
+      version: json['version'] as String,
+      protocolVersion: json['protocolVersion'] as String?,
+      capabilities: json['capabilities'] as Map<String, dynamic>?,
+      metadata: json['metadata'] as Map<String, dynamic>?,
+    );
+  }
+}
+
+/// Client information (2025-03-26 compliant)
+@immutable
+class ClientInfo {
+  final String name;
+  final String version;
+  final Map<String, dynamic>? capabilities;
+  final Map<String, dynamic>? metadata;
+
+  const ClientInfo({
+    required this.name,
+    required this.version,
+    this.capabilities,
+    this.metadata,
+  });
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{'name': name, 'version': version};
+    if (capabilities != null) json['capabilities'] = capabilities!;
+    if (metadata != null) json['metadata'] = metadata!;
+    return json;
+  }
+
+  factory ClientInfo.fromJson(Map<String, dynamic> json) {
+    return ClientInfo(
+      name: json['name'] as String,
+      version: json['version'] as String,
+      capabilities: json['capabilities'] as Map<String, dynamic>?,
+      metadata: json['metadata'] as Map<String, dynamic>?,
+    );
+  }
+}
+
+/// Client capabilities configuration
+@immutable
+class ClientCapabilities {
+  /// Root management support
+  final bool roots;
+
+  /// Whether roots list changes are sent as notifications
+  final bool rootsListChanged;
+
+  /// Sampling support
+  final bool sampling;
+
+  /// Create a capabilities object with specified settings
+  const ClientCapabilities({
+    this.roots = false,
+    this.rootsListChanged = false,
+    this.sampling = false,
+  });
+
+  /// Convert capabilities to JSON
+  Map<String, dynamic> toJson() {
+    final result = <String, dynamic>{};
+
+    if (roots) {
+      result['roots'] = {'listChanged': rootsListChanged};
+    }
+
+    if (sampling) {
+      result['sampling'] = {};
+    }
+
+    return result;
+  }
+
+  factory ClientCapabilities.fromJson(Map<String, dynamic> json) {
+    final rootsConfig = json['roots'] as Map<String, dynamic>?;
+    final samplingConfig = json['sampling'] as Map<String, dynamic>?;
+
+    return ClientCapabilities(
+      roots: rootsConfig != null,
+      rootsListChanged: rootsConfig?['listChanged'] as bool? ?? false,
+      sampling: samplingConfig != null,
+    );
+  }
+}
+
+/// Server capabilities
+@immutable
+class ServerCapabilities {
+  /// Tool support
+  final bool tools;
+
+  /// Whether tools list changes are sent as notifications
+  final bool toolsListChanged;
+
+  /// Resource support
+  final bool resources;
+
+  /// Whether resources list changes are sent as notifications
+  final bool resourcesListChanged;
+
+  /// Prompt support
+  final bool prompts;
+
+  /// Whether prompts list changes are sent as notifications
+  final bool promptsListChanged;
+
+  /// Logging support
+  final bool logging;
+
+  /// Sampling support
+  final bool sampling;
+
+  /// Create a capabilities object with specified settings
+  const ServerCapabilities({
+    this.tools = false,
+    this.toolsListChanged = false,
+    this.resources = false,
+    this.resourcesListChanged = false,
+    this.prompts = false,
+    this.promptsListChanged = false,
+    this.logging = false,
+    this.sampling = false,
+  });
+
+  /// Create capabilities from JSON
+  factory ServerCapabilities.fromJson(Map<String, dynamic> json) {
+    final toolsConfig =
+        json['tools'] != null
+            ? Map<String, dynamic>.from(json['tools'] as Map)
+            : null;
+    final resourcesConfig =
+        json['resources'] != null
+            ? Map<String, dynamic>.from(json['resources'] as Map)
+            : null;
+    final promptsConfig =
+        json['prompts'] != null
+            ? Map<String, dynamic>.from(json['prompts'] as Map)
+            : null;
+    final loggingConfig =
+        json['logging'] != null
+            ? Map<String, dynamic>.from(json['logging'] as Map)
+            : null;
+    final samplingConfig =
+        json['sampling'] != null
+            ? Map<String, dynamic>.from(json['sampling'] as Map)
+            : null;
+
+    return ServerCapabilities(
+      tools: toolsConfig != null,
+      toolsListChanged: toolsConfig?['listChanged'] as bool? ?? false,
+      resources: resourcesConfig != null,
+      resourcesListChanged: resourcesConfig?['listChanged'] as bool? ?? false,
+      prompts: promptsConfig != null,
+      promptsListChanged: promptsConfig?['listChanged'] as bool? ?? false,
+      logging: loggingConfig != null,
+      sampling: samplingConfig != null,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    final result = <String, dynamic>{};
+
+    if (tools) {
+      result['tools'] = {'listChanged': toolsListChanged};
+    }
+
+    if (resources) {
+      result['resources'] = {'listChanged': resourcesListChanged};
+    }
+
+    if (prompts) {
+      result['prompts'] = {'listChanged': promptsListChanged};
+    }
+
+    if (logging) {
+      result['logging'] = {};
+    }
+
+    if (sampling) {
+      result['sampling'] = {};
+    }
+
+    return result;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ServerCapabilities &&
+          tools == other.tools &&
+          toolsListChanged == other.toolsListChanged &&
+          resources == other.resources &&
+          resourcesListChanged == other.resourcesListChanged &&
+          prompts == other.prompts &&
+          promptsListChanged == other.promptsListChanged &&
+          logging == other.logging &&
+          sampling == other.sampling;
+
+  @override
+  int get hashCode => Object.hash(
+    tools,
+    toolsListChanged,
+    resources,
+    resourcesListChanged,
+    prompts,
+    promptsListChanged,
+    logging,
+    sampling,
+  );
+
+  @override
+  String toString() =>
+      'ServerCapabilities('
+      'tools: $tools, '
+      'toolsListChanged: $toolsListChanged, '
+      'resources: $resources, '
+      'resourcesListChanged: $resourcesListChanged, '
+      'prompts: $prompts, '
+      'promptsListChanged: $promptsListChanged, '
+      'logging: $logging, '
+      'sampling: $sampling)';
+}
+
+/// Initialize request
+@immutable
+class InitializeRequest {
+  final ClientInfo clientInfo;
+  final String protocolVersion;
+
+  const InitializeRequest({
+    required this.clientInfo,
+    required this.protocolVersion,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'clientInfo': clientInfo.toJson(),
+      'protocolVersion': protocolVersion,
+    };
+  }
+
+  factory InitializeRequest.fromJson(Map<String, dynamic> json) {
+    return InitializeRequest(
+      clientInfo: ClientInfo.fromJson(
+        json['clientInfo'] as Map<String, dynamic>,
+      ),
+      protocolVersion: json['protocolVersion'] as String,
+    );
+  }
+}
+
+/// Initialize result
+@immutable
+class InitializeResult {
+  final ServerInfo serverInfo;
+  final String protocolVersion;
+  final Map<String, dynamic>? capabilities;
+
+  const InitializeResult({
+    required this.serverInfo,
+    required this.protocolVersion,
+    this.capabilities,
+  });
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{
+      'serverInfo': serverInfo.toJson(),
+      'protocolVersion': protocolVersion,
+    };
+    if (capabilities != null) json['capabilities'] = capabilities!;
+    return json;
+  }
+
+  factory InitializeResult.fromJson(Map<String, dynamic> json) {
+    return InitializeResult(
+      serverInfo: ServerInfo.fromJson(
+        json['serverInfo'] as Map<String, dynamic>,
+      ),
+      protocolVersion: json['protocolVersion'] as String,
+      capabilities: json['capabilities'] as Map<String, dynamic>?,
+    );
+  }
+}
+
+/// Tools list changed notification
+@immutable
+class ToolsListChangedNotification {
+  const ToolsListChangedNotification();
+
+  Map<String, dynamic> toJson() => {};
+
+  factory ToolsListChangedNotification.fromJson(Map<String, dynamic> json) {
+    return const ToolsListChangedNotification();
+  }
+}
+
+/// Resources list changed notification
+@immutable
+class ResourcesListChangedNotification {
+  const ResourcesListChangedNotification();
+
+  Map<String, dynamic> toJson() => {};
+
+  factory ResourcesListChangedNotification.fromJson(Map<String, dynamic> json) {
+    return const ResourcesListChangedNotification();
+  }
+}
+
+/// Prompts list changed notification
+@immutable
+class PromptsListChangedNotification {
+  const PromptsListChangedNotification();
+
+  Map<String, dynamic> toJson() => {};
+
+  factory PromptsListChangedNotification.fromJson(Map<String, dynamic> json) {
+    return const PromptsListChangedNotification();
+  }
+}
+
+/// Resource updated notification
+@immutable
+class ResourceUpdatedNotification {
+  final String uri;
+
+  const ResourceUpdatedNotification({required this.uri});
+
+  Map<String, dynamic> toJson() => {'uri': uri};
+
+  factory ResourceUpdatedNotification.fromJson(Map<String, dynamic> json) {
+    return ResourceUpdatedNotification(uri: json['uri'] as String);
+  }
+}
+
+/// List tools result
+@immutable
+class ListToolsResult {
+  final List<Tool> tools;
+
+  const ListToolsResult({required this.tools});
+
+  Map<String, dynamic> toJson() {
+    return {'tools': tools.map((t) => t.toJson()).toList()};
+  }
+
+  factory ListToolsResult.fromJson(Map<String, dynamic> json) {
+    final List<dynamic> toolsList = json['tools'] as List<dynamic>? ?? [];
+    final tools =
+        toolsList
+            .map((tool) => Tool.fromJson(tool as Map<String, dynamic>))
+            .toList();
+    return ListToolsResult(tools: tools);
+  }
+}
+
+/// List resources result
+@immutable
+class ListResourcesResult {
+  final List<Resource> resources;
+
+  const ListResourcesResult({required this.resources});
+
+  Map<String, dynamic> toJson() {
+    return {'resources': resources.map((r) => r.toJson()).toList()};
+  }
+
+  factory ListResourcesResult.fromJson(Map<String, dynamic> json) {
+    final List<dynamic> resourcesList =
+        json['resources'] as List<dynamic>? ?? [];
+    final resources =
+        resourcesList
+            .map(
+              (resource) => Resource.fromJson(resource as Map<String, dynamic>),
+            )
+            .toList();
+    return ListResourcesResult(resources: resources);
+  }
+}
+
+/// List prompts result
+@immutable
+class ListPromptsResult {
+  final List<Prompt> prompts;
+
+  const ListPromptsResult({required this.prompts});
+
+  Map<String, dynamic> toJson() {
+    return {'prompts': prompts.map((p) => p.toJson()).toList()};
+  }
+
+  factory ListPromptsResult.fromJson(Map<String, dynamic> json) {
+    final List<dynamic> promptsList = json['prompts'] as List<dynamic>? ?? [];
+    final prompts =
+        promptsList
+            .map((prompt) => Prompt.fromJson(prompt as Map<String, dynamic>))
+            .toList();
+    return ListPromptsResult(prompts: prompts);
+  }
+}
+
+/// Call tool request
+@immutable
+class CallToolRequest {
+  final String name;
+  final Map<String, dynamic>? arguments;
+
+  const CallToolRequest({required this.name, this.arguments});
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{'name': name};
+    if (arguments != null) json['arguments'] = arguments!;
+    return json;
+  }
+
+  factory CallToolRequest.fromJson(Map<String, dynamic> json) {
+    return CallToolRequest(
+      name: json['name'] as String,
+      arguments: json['arguments'] as Map<String, dynamic>?,
+    );
+  }
+}
+
+/// Read resource request
+@immutable
+class ReadResourceRequest {
+  final String uri;
+
+  const ReadResourceRequest({required this.uri});
+
+  Map<String, dynamic> toJson() => {'uri': uri};
+
+  factory ReadResourceRequest.fromJson(Map<String, dynamic> json) {
+    return ReadResourceRequest(uri: json['uri'] as String);
+  }
+}
+
+/// Get prompt request
+@immutable
+class GetPromptRequest {
+  final String name;
+  final Map<String, dynamic>? arguments;
+
+  const GetPromptRequest({required this.name, this.arguments});
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{'name': name};
+    if (arguments != null) json['arguments'] = arguments!;
+    return json;
+  }
+
+  factory GetPromptRequest.fromJson(Map<String, dynamic> json) {
+    return GetPromptRequest(
+      name: json['name'] as String,
+      arguments: json['arguments'] as Map<String, dynamic>?,
+    );
+  }
+}
+
+/// Completion request
+@immutable
+class CompletionRequest {
+  final Map<String, dynamic> ref;
+  final Map<String, dynamic>? argument;
+
+  const CompletionRequest({required this.ref, this.argument});
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{'ref': ref};
+    if (argument != null) json['argument'] = argument!;
+    return json;
+  }
+
+  factory CompletionRequest.fromJson(Map<String, dynamic> json) {
+    return CompletionRequest(
+      ref: json['ref'] as Map<String, dynamic>,
+      argument: json['argument'] as Map<String, dynamic>?,
+    );
+  }
+}
+
+/// Completion result
+@immutable
+class CompletionResult {
+  final Map<String, dynamic> completion;
+
+  const CompletionResult({required this.completion});
+
+  Map<String, dynamic> toJson() => {'completion': completion};
+
+  factory CompletionResult.fromJson(Map<String, dynamic> json) {
+    return CompletionResult(
+      completion: json['completion'] as Map<String, dynamic>,
+    );
+  }
+}
+
+/// Log message notification
+@immutable
+class LogMessageNotification {
+  final McpLogLevel level;
+  final String message;
+  final String? logger;
+  final Map<String, dynamic>? data;
+
+  const LogMessageNotification({
+    required this.level,
+    required this.message,
+    this.logger,
+    this.data,
+  });
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{'level': level.name, 'message': message};
+    if (logger != null) json['logger'] = logger!;
+    if (data != null) json['data'] = data!;
+    return json;
+  }
+
+  factory LogMessageNotification.fromJson(Map<String, dynamic> json) {
+    return LogMessageNotification(
+      level: McpLogLevel.values.firstWhere((e) => e.name == json['level']),
+      message: json['message'] as String,
+      logger: json['logger'] as String?,
+      data: json['data'] as Map<String, dynamic>?,
+    );
+  }
+}
+
+/// Cancel request notification
+@immutable
+class CancelRequestNotification {
+  final dynamic requestId;
+  final String? reason;
+
+  const CancelRequestNotification({required this.requestId, this.reason});
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{'requestId': requestId};
+    if (reason != null) json['reason'] = reason!;
+    return json;
+  }
+
+  factory CancelRequestNotification.fromJson(Map<String, dynamic> json) {
+    return CancelRequestNotification(
+      requestId: json['requestId'],
+      reason: json['reason'] as String?,
+    );
+  }
+}
+
+/// Progress notification
+@immutable
+class ProgressNotification {
+  final dynamic requestId;
+  final double progress;
+  final double? total;
+
+  const ProgressNotification({
+    required this.requestId,
+    required this.progress,
+    this.total,
+  });
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{
+      'requestId': requestId,
+      'progress': progress,
+    };
+    if (total != null) json['total'] = total!;
+    return json;
+  }
+
+  factory ProgressNotification.fromJson(Map<String, dynamic> json) {
+    return ProgressNotification(
+      requestId: json['requestId'],
+      progress: (json['progress'] as num).toDouble(),
+      total: json['total'] != null ? (json['total'] as num).toDouble() : null,
+    );
+  }
 }

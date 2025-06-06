@@ -1,3 +1,28 @@
+## 1.0.0
+
+* Breaking Changes and Major Update to 2025-03-26 Protocol
+  * Updated to MCP protocol version 2025-03-26 (from 2024-11-05)
+  * Complete refactoring for modern Dart 3.8+ patterns
+  * Added @immutable annotations throughout models
+  * Introduced sealed classes and pattern matching
+  * Enhanced type safety with Result<T, E> pattern
+  * Backward API compatibility maintained
+
+* New Features
+  * Protocol version negotiation support
+  * Enhanced Content model with annotations
+  * Tool cancellation and progress tracking
+  * Improved resource templates
+  * Better error handling with typed results
+  * Protocol constants centralized in McpProtocol class
+
+* Technical Improvements
+  * All models now use const constructors
+  * Factory constructors for JSON deserialization
+  * Centralized protocol configuration
+  * Better numeric type handling in JSON
+  * Cleaner API surface with protocol exports
+
 ## 0.1.8
 
 * Added

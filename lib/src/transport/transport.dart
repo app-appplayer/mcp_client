@@ -6,7 +6,7 @@ import 'dart:io';
 import '../../logger.dart';
 import '../models/models.dart';
 
-final Logger _logger = Logger.getLogger('mcp_client.transport');
+final Logger _logger = Logger('mcp_client.transport');
 
 /// Abstract base class for client transport implementations
 abstract class ClientTransport {
@@ -66,35 +66,35 @@ class StdioClientTransport implements ClientTransport {
         .transform(const LineSplitter())
         .where((line) => line.isNotEmpty)
         .map((line) {
-      try {
-        _logger.debug('Raw received line: $line');
-        final parsedMessage = jsonDecode(line);
-        _logger.debug('Parsed message: $parsedMessage');
-        return parsedMessage;
-      } catch (e) {
-        _logger.debug('JSON parsing error: $e');
-        _logger.debug('Problematic line: $line');
-        return null;
-      }
-    })
+          try {
+            _logger.debug('Raw received line: $line');
+            final parsedMessage = jsonDecode(line);
+            _logger.debug('Parsed message: $parsedMessage');
+            return parsedMessage;
+          } catch (e) {
+            _logger.debug('JSON parsing error: $e');
+            _logger.debug('Problematic line: $line');
+            return null;
+          }
+        })
         .where((message) => message != null)
         .listen(
           (message) {
             _logger.debug('Processing message: $message');
-        if (!_messageController.isClosed) {
-          _messageController.add(message);
-        }
-      },
-      onError: (error) {
-        _logger.debug('Stream error: $error');
-        _handleTransportError(error);
-      },
-      onDone: () {
-        _logger.debug('stdout stream done');
-        _handleStreamClosure();
-      },
-      cancelOnError: false,
-    );
+            if (!_messageController.isClosed) {
+              _messageController.add(message);
+            }
+          },
+          onError: (error) {
+            _logger.debug('Stream error: $error');
+            _handleTransportError(error);
+          },
+          onDone: () {
+            _logger.debug('stdout stream done');
+            _handleStreamClosure();
+          },
+          cancelOnError: false,
+        );
 
     // Store subscription for cleanup
     _processSubscriptions.add(stdoutSubscription);
@@ -104,8 +104,8 @@ class StdioClientTransport implements ClientTransport {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      _logger.debug('Server stderr: $line');
-    });
+          _logger.debug('Server stderr: $line');
+        });
 
     _processSubscriptions.add(stderrSubscription);
 
@@ -232,10 +232,7 @@ class SseClientTransport implements ClientTransport {
   bool _isClosed = false;
 
   // Private constructor
-  SseClientTransport._internal({
-    required this.serverUrl,
-    this.headers,
-  });
+  SseClientTransport._internal({required this.serverUrl, this.headers});
 
   // Factory method for creation
   static Future<SseClientTransport> create({
@@ -248,46 +245,65 @@ class SseClientTransport implements ClientTransport {
     );
 
     try {
+      // Generate session ID for MCP standard compliance
+      final sessionId = _generateSessionId();
+      final sseUrlWithSession =
+          serverUrl.contains('?')
+              ? '$serverUrl&session_id=$sessionId'
+              : '$serverUrl?session_id=$sessionId';
+
+      _logger.debug('SSE URL with session: $sseUrlWithSession');
+
       // Set up event handlers
       final endpointCompleter = Completer<String>();
 
       await transport._eventSource.connect(
-          serverUrl,
-          headers: headers,
-          onOpen: (endpoint) {
-            if (!endpointCompleter.isCompleted && endpoint != null) {
-              endpointCompleter.complete(endpoint);
-            }
-          },
-          onMessage: (data) {
-            // This is crucial - forward messages to the controller
-            if (data is Map && data.containsKey('jsonrpc') &&
-                data.containsKey('id') && !transport._messageController.isClosed) {
-              _logger.debug('Forwarding JSON-RPC response: $data');
-              transport._messageController.add(data);
-            } else if (!transport._messageController.isClosed) {
-              transport._messageController.add(data);
-            }
-          },
-          onError: (e) {
-            _logger.debug('SSE error: $e');
-            if (!endpointCompleter.isCompleted) {
-              endpointCompleter.completeError(e);
-            }
-            transport._handleError(e);
+        sseUrlWithSession,
+        headers: headers,
+        onMessage: (data) {
+          // This is crucial - forward messages to the controller
+          if (data is Map &&
+              data.containsKey('jsonrpc') &&
+              data.containsKey('id') &&
+              !transport._messageController.isClosed) {
+            _logger.debug('Forwarding JSON-RPC response: $data');
+            transport._messageController.add(data);
+          } else if (!transport._messageController.isClosed) {
+            transport._messageController.add(data);
           }
+        },
+        onError: (e) {
+          _logger.debug('SSE error: $e');
+          if (!endpointCompleter.isCompleted) {
+            endpointCompleter.completeError(e);
+          }
+          transport._handleError(e);
+        },
+        onEndpoint: (endpoint) {
+          _logger.debug('Received endpoint from SSE: $endpoint');
+          if (!endpointCompleter.isCompleted && endpoint != null) {
+            endpointCompleter.complete(endpoint);
+          }
+        },
       );
 
       // Wait for endpoint
       final endpointPath = await endpointCompleter.future.timeout(
-          Duration(seconds: 10),
-          onTimeout: () => throw McpError('Timed out waiting for endpoint')
+        Duration(seconds: 10),
+        onTimeout: () => throw McpError('Timed out waiting for endpoint'),
       );
 
-      // Set up message endpoint
-      final baseUrl = Uri.parse(serverUrl);
-      transport._messageEndpoint = transport._constructEndpointUrl(baseUrl, endpointPath);
-      _logger.debug('Transport ready with endpoint: ${transport._messageEndpoint}');
+      // Set up message endpoint following MCP standard
+      transport._messageEndpoint =
+          endpointPath.startsWith('http')
+              ? endpointPath
+              : transport._constructEndpointUrl(
+                Uri.parse(serverUrl),
+                endpointPath,
+              );
+      _logger.debug(
+        'Transport ready with MCP standard endpoint: ${transport._messageEndpoint}',
+      );
 
       return transport;
     } catch (e) {
@@ -296,7 +312,6 @@ class SseClientTransport implements ClientTransport {
     }
   }
 
-
   // Helper method to construct endpoint URL
   String _constructEndpointUrl(Uri baseUrl, String endpointPath) {
     try {
@@ -304,19 +319,19 @@ class SseClientTransport implements ClientTransport {
       if (endpointPath.contains('?')) {
         final parts = endpointPath.split('?');
         endpointUri = Uri(
-            path: parts[0],
-            query: parts.length > 1 ? parts[1] : null
+          path: parts[0],
+          query: parts.length > 1 ? parts[1] : null,
         );
       } else {
         endpointUri = Uri(path: endpointPath);
       }
 
       return Uri(
-          scheme: baseUrl.scheme,
-          host: baseUrl.host,
-          port: baseUrl.port,
-          path: endpointUri.path,
-          query: endpointUri.query
+        scheme: baseUrl.scheme,
+        host: baseUrl.host,
+        port: baseUrl.port,
+        path: endpointUri.path,
+        query: endpointUri.query,
       ).toString();
     } catch (e) {
       _logger.debug('Error parsing endpoint URL: $e');
@@ -346,7 +361,9 @@ class SseClientTransport implements ClientTransport {
     }
 
     if (_messageEndpoint == null) {
-      throw McpError('Cannot send message: SSE connection not fully established');
+      throw McpError(
+        'Cannot send message: SSE connection not fully established',
+      );
     }
 
     try {
@@ -369,10 +386,12 @@ class SseClientTransport implements ClientTransport {
       request.write(jsonMessage);
       final response = await request.close();
 
-      // Just check for successful delivery
-      if (response.statusCode == 200) {
+      // Check for successful delivery (200 OK or 202 Accepted)
+      if (response.statusCode == 200 || response.statusCode == 202) {
         final responseBody = await response.transform(utf8.decoder).join();
-        _logger.debug('Message delivery confirmation: $responseBody');
+        _logger.debug(
+          'Message delivery confirmation (${response.statusCode}): $responseBody',
+        );
         // Don't forward this to message controller, actual response comes via SSE
       } else {
         final responseBody = await response.transform(utf8.decoder).join();
@@ -404,6 +423,13 @@ class SseClientTransport implements ClientTransport {
       _closeCompleter.complete();
     }
   }
+
+  // Generate a session ID for MCP protocol
+  static String _generateSessionId() {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final random = (timestamp % 100000).toString().padLeft(5, '0');
+    return '${timestamp.toRadixString(16)}$random';
+  }
 }
 
 /// EventSource implementation for SSE
@@ -416,15 +442,17 @@ class EventSource {
   bool _isConnected = false;
 
   bool get isConnected => _isConnected;
-  HttpClientResponse? get response => _response; // Added getter to access response
+  HttpClientResponse? get response =>
+      _response; // Added getter to access response
 
   Future<void> connect(
-      String url, {
-        Map<String, String>? headers,
-        Function(String?)? onOpen,
-        Function(dynamic)? onMessage,
-        Function(dynamic)? onError,
-      }) async {
+    String url, {
+    Map<String, String>? headers,
+    Function(String?)? onOpen,
+    Function(dynamic)? onMessage,
+    Function(dynamic)? onError,
+    Function(String?)? onEndpoint,
+  }) async {
     _logger.debug('EventSource connecting');
     if (_isConnected) {
       throw McpError('EventSource is already connected');
@@ -435,9 +463,13 @@ class EventSource {
       _client = HttpClient();
       _request = await _client!.getUrl(Uri.parse(url));
 
-      // Set up SSE headers
+      // Set up MCP standard SSE headers
       _request!.headers.set('Accept', 'text/event-stream');
       _request!.headers.set('Cache-Control', 'no-cache');
+      _request!.headers.set(
+        'Accept-Encoding',
+        'identity',
+      ); // Disable compression
       if (headers != null) {
         headers.forEach((key, value) {
           _request!.headers.set(key, value);
@@ -448,24 +480,30 @@ class EventSource {
 
       if (_response!.statusCode != 200) {
         final body = await _response!.transform(utf8.decoder).join();
-        throw McpError('Failed to connect to SSE endpoint: ${_response!.statusCode} - $body');
+        throw McpError(
+          'Failed to connect to SSE endpoint: ${_response!.statusCode} - $body',
+        );
       }
 
       _isConnected = true;
       _logger.debug('EventSource connection established');
 
-      // Set up subscription to process events
-      _subscription = _response!.transform(utf8.decoder).listen(
-              (chunk) {
+      // Set up subscription to process events with proper UTF-8 handling
+      _subscription = _response!.listen(
+        (List<int> data) {
+          try {
+            // Convert bytes to string using UTF-8 decoder
+            final chunk = utf8.decode(data, allowMalformed: true);
             // Log raw data for debugging
-            _logger.debug('Raw SSE data: $chunk');
+            _logger.debug('Raw SSE data: [$chunk]');
             _buffer.write(chunk);
 
             // Process all events in buffer
             final content = _buffer.toString();
 
             // Simple check for JSON-RPC responses
-            if (content.contains('"jsonrpc":"2.0"') || content.contains('"jsonrpc": "2.0"')) {
+            if (content.contains('"jsonrpc":"2.0"') ||
+                content.contains('"jsonrpc": "2.0"')) {
               _logger.debug('Detected JSON-RPC data in SSE stream');
 
               try {
@@ -503,30 +541,39 @@ class EventSource {
               }
             }
 
-            // If no JSON-RPC data found, try regular SSE event processing
+            // Process SSE events
             final event = _processBuffer();
+            _logger.debug(
+              'Processed SSE event: ${event.event}, data: ${event.data}',
+            );
 
-            if (event.event == 'endpoint' && event.data != null && onOpen != null) {
-              // Handle endpoint event
-              onOpen(event.data);
+            if (event.event == 'endpoint' && event.data != null) {
+              _logger.debug('Received endpoint event: ${event.data}');
+              if (onEndpoint != null) {
+                onEndpoint(event.data);
+              }
             } else if (event.data != null && onMessage != null) {
               onMessage(event.data);
             }
-          },
-          onError: (e) {
-            _logger.debug('EventSource error: $e');
-            _isConnected = false;
-            if (onError != null) {
-              onError(e);
-            }
-          },
-          onDone: () {
-            _logger.debug('EventSource stream closed');
-            _isConnected = false;
-            if (onError != null) {
-              onError('Connection closed');
-            }
+          } catch (e) {
+            _logger.debug('Error processing SSE data: $e');
+            // Continue processing despite individual chunk errors
           }
+        },
+        onError: (e) {
+          _logger.debug('EventSource error: $e');
+          _isConnected = false;
+          if (onError != null) {
+            onError(e);
+          }
+        },
+        onDone: () {
+          _logger.debug('EventSource stream closed');
+          _isConnected = false;
+          if (onError != null) {
+            onError('Connection closed');
+          }
+        },
       );
     } catch (e) {
       _logger.debug('EventSource connection error: $e');
@@ -538,38 +585,53 @@ class EventSource {
     }
   }
 
-  // Process the buffer to find SSE events
+  // Process the buffer to find SSE events - MCP standard implementation
   _SseEvent _processBuffer() {
-    final lines = _buffer.toString().split('\n');
-    _logger.debug('_processBuffer lines count: ${lines.length}');
+    final content = _buffer.toString();
+    _logger.debug('_processBuffer content: [$content]');
+
+    if (content.isEmpty) {
+      return _SseEvent('', null);
+    }
+
+    // Split by double newline to find complete events (handle both \n\n and \r\n\r\n)
+    final eventBlocks = content.split(RegExp(r'(\r?\n){2}'));
+    _logger.debug('_processBuffer event blocks count: ${eventBlocks.length}');
+
+    if (eventBlocks.length < 2) {
+      // No complete event yet
+      return _SseEvent('', null);
+    }
+
+    // Process the first complete event block
+    final eventBlock = eventBlocks[0];
+    final lines = eventBlock.split(RegExp(r'\r?\n'));
 
     String currentEvent = '';
     String? currentData;
-    bool isCheckedType = false;
-    bool isCheckedData = false;
 
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i].trim();
+    for (final line in lines) {
+      final trimmedLine = line.trim();
+      _logger.debug('Processing line: [$trimmedLine]');
 
-      if (line.startsWith('event:') && !isCheckedType) {
-        currentEvent = line.substring(6).trim();
-        isCheckedType = true;
+      if (trimmedLine.startsWith('event:')) {
+        currentEvent = trimmedLine.substring(6).trim();
         _logger.debug('Found event type: $currentEvent');
-      }
-      else if (line.startsWith('data:') && !isCheckedData) {
-        currentData = line.substring(5).trim();
-        isCheckedData = true;
+      } else if (trimmedLine.startsWith('data:')) {
+        currentData = trimmedLine.substring(5).trim();
         _logger.debug('Found event data: $currentData');
-      }
-
-      if(isCheckedType && isCheckedData) {
-        _logger.debug('Creating event: $currentEvent, data: $currentData');
-        return _SseEvent(currentEvent, currentData);
       }
     }
 
-    // Return empty event if no complete event found
-    return _SseEvent('', null);
+    // Clear the processed event from buffer
+    final remaining = eventBlocks.skip(1).join('\r\n\r\n');
+    _buffer.clear();
+    if (remaining.isNotEmpty) {
+      _buffer.write(remaining);
+    }
+
+    _logger.debug('Complete event found: $currentEvent, data: $currentData');
+    return _SseEvent(currentEvent, currentData);
   }
 
   void close() {

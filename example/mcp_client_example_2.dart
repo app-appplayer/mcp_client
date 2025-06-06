@@ -2,20 +2,23 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:mcp_client/mcp_client.dart';
 
-/// MCP 클라이언트 예제 애플리케이션
+/// MCP client example application
 void main() async {
-  final Logger _logger = Logger.getLogger('mcp_client_example');
-  _logger.setLevel(LogLevel.debug);
+  final logger = Logger('mcp_client_example');
+  Logger.root.level = Level.INFO;
+  Logger.root.onRecord.listen((record) {
+    stderr.writeln('${record.level.name}: ${record.time}: ${record.message}');
+  });
 
-  // 로그 파일 생성
+  // Create log file
   final logFile = File('mcp_client_example.log');
   final logSink = logFile.openWrite();
 
-  logToConsoleAndFile('MCP 클라이언트 예제 시작...', _logger, logSink);
+  logToConsoleAndFile('Starting MCP client example...', logger, logSink);
 
   try {
-    // 클라이언트 생성
-    final client = McpClient.createClient(
+    // Method 1: Using production config with HTTP transport
+    final config = McpClient.productionConfig(
       name: 'Example MCP Client',
       version: '1.0.0',
       capabilities: ClientCapabilities(
@@ -25,118 +28,152 @@ void main() async {
       ),
     );
 
-    logToConsoleAndFile('클라이언트가 초기화되었습니다.', _logger, logSink);
+    logToConsoleAndFile('Client configuration initialized.', logger, logSink);
 
-    // 파일 시스템 MCP 서버와 STDIO로 연결
-    logToConsoleAndFile('MCP 파일 시스템 서버에 연결 중...', _logger, logSink);
-
-    final transport = await McpClient.createStdioTransport(
-      command: 'npx',
-      arguments: ['-y', '@modelcontextprotocol/server-filesystem', Directory.current.path],
+    // Connect to file system MCP server via STDIO
+    logToConsoleAndFile(
+      'Connecting to MCP file system server...',
+      logger,
+      logSink,
     );
 
-    logToConsoleAndFile('STDIO 전송 메커니즘이 생성되었습니다.', _logger, logSink);
+    // Demonstrate production-ready transport with enhanced features
+    final transportConfig = TransportConfig.stdio(
+      command: 'npx',
+      arguments: [
+        '-y',
+        '@modelcontextprotocol/server-filesystem',
+        Directory.current.path,
+      ],
+    );
 
-    // 연결 설정
-    await client.connect(transport);
-    logToConsoleAndFile('서버에 성공적으로 연결되었습니다!', _logger, logSink);
+    // Production example: SSE transport with authentication and monitoring
+    // final transportConfig = TransportConfig.sse(
+    //   serverUrl: 'https://secure-api.example.com/sse',
+    //   oauthConfig: OAuthConfig(
+    //     authorizationEndpoint: 'https://auth.example.com/authorize',
+    //     tokenEndpoint: 'https://auth.example.com/token',
+    //     clientId: 'production-client',
+    //     clientSecret: 'your-secret',
+    //     scopes: ['mcp:read', 'mcp:write'],
+    //   ),
+    //   enableCompression: true,
+    //   heartbeatInterval: const Duration(seconds: 30),
+    //   maxMissedHeartbeats: 3,
+    //   headers: {
+    //     'User-Agent': 'MCP-Production-Client/2.0',
+    //     'X-Client-Version': '2.0.0',
+    //   },
+    // );
 
-    // 알림 핸들러 등록
-    client.onToolsListChanged(() {
-      logToConsoleAndFile('도구 목록이 변경되었습니다!', _logger, logSink);
-    });
+    final clientResult = await McpClient.createAndConnect(
+      config: config,
+      transportConfig: transportConfig,
+    );
 
-    client.onResourcesListChanged(() {
-      logToConsoleAndFile('리소스 목록이 변경되었습니다!', _logger, logSink);
-    });
+    final client = clientResult.fold((c) {
+      logToConsoleAndFile('Successfully connected to server!', logger, logSink);
+      return c;
+    }, (error) => throw Exception('Failed to connect: $error'));
 
-    client.onResourceUpdated((uri) {
-      logToConsoleAndFile('리소스가 업데이트되었습니다: $uri', _logger, logSink);
-    });
+    // Event handling is performed through client.onMessage stream
 
-    client.onLogging((level, message, logger, data) {
-      logToConsoleAndFile('서버 로그 [$level]: $message', _logger, logSink);
-    });
+    // Check connection status
+    logToConsoleAndFile('\n--- Server Connection Status ---', logger, logSink);
+    logToConsoleAndFile('Connected to server', logger, logSink);
 
-    try {
-      // 서버 건강 상태 확인
-      final health = await client.healthCheck();
-      logToConsoleAndFile('\n--- 서버 건강 상태 ---', _logger, logSink);
-      logToConsoleAndFile('서버 실행 중: ${health.isRunning}', _logger, logSink);
-      logToConsoleAndFile('연결된 세션 수: ${health.connectedSessions}', _logger, logSink);
-      logToConsoleAndFile('등록된 도구 수: ${health.registeredTools}', _logger, logSink);
-      logToConsoleAndFile('등록된 리소스 수: ${health.registeredResources}', _logger, logSink);
-      logToConsoleAndFile('등록된 프롬프트 수: ${health.registeredPrompts}', _logger, logSink);
-      logToConsoleAndFile('서버 가동 시간: ${health.uptime.inSeconds}초', _logger, logSink);
-    } catch (e) {
-      logToConsoleAndFile('서버 건강 상태 확인 기능이 지원되지 않습니다: $e', _logger, logSink);
-    }
-
-    // 도구 목록 확인
+    // Check tool list
     final tools = await client.listTools();
-    logToConsoleAndFile('\n--- 사용 가능한 도구 목록 ---', _logger, logSink);
+    logToConsoleAndFile('\n--- Available Tools List ---', logger, logSink);
 
     if (tools.isEmpty) {
-      logToConsoleAndFile('사용 가능한 도구가 없습니다.', _logger, logSink);
+      logToConsoleAndFile('No tools available.', logger, logSink);
     } else {
       for (final tool in tools) {
-        logToConsoleAndFile('도구: ${tool.name} - ${tool.description}', _logger, logSink);
+        logToConsoleAndFile(
+          'Tool: ${tool.name} - ${tool.description}',
+          logger,
+          logSink,
+        );
       }
     }
 
-    // 현재 디렉토리 조회
+    // Query current directory
     if (tools.any((tool) => tool.name == 'readdir')) {
-      logToConsoleAndFile('\n--- 현재 디렉토리 내용 조회 ---', _logger, logSink);
+      logToConsoleAndFile(
+        '\n--- Current Directory Contents ---',
+        logger,
+        logSink,
+      );
 
       final result = await client.callTool('readdir', {
-        'path': Directory.current.path
+        'path': Directory.current.path,
       });
 
       if (result.isError == true) {
-        logToConsoleAndFile('오류: ${(result.content.first as TextContent).text}', _logger, logSink);
+        logToConsoleAndFile(
+          'Error: ${(result.content.first as TextContent).text}',
+          logger,
+          logSink,
+        );
       } else {
         final contentText = (result.content.first as TextContent).text;
-        logToConsoleAndFile('현재 디렉토리 내용:', _logger, logSink);
+        logToConsoleAndFile('Current directory contents:', logger, logSink);
 
         List<String> files = [];
         try {
-          // JSON 형식으로 반환된 파일 목록 파싱
+          // Parse file list returned in JSON format
           final List<dynamic> jsonList = jsonDecode(contentText);
           files = jsonList.cast<String>();
         } catch (e) {
-          // 단순 텍스트 형식인 경우 줄바꿈으로 분리
-          files = contentText.split('\n')
-              .where((line) => line.trim().isNotEmpty)
-              .toList();
+          // If simple text format, split by newline
+          files =
+              contentText
+                  .split('\n')
+                  .where((line) => line.trim().isNotEmpty)
+                  .toList();
         }
 
         for (final file in files) {
-          logToConsoleAndFile('- $file', _logger, logSink);
+          logToConsoleAndFile('- $file', logger, logSink);
         }
 
-        // README.md 파일이 있으면 내용 읽기
+        // Read README.md file if it exists
         final readmeFile = files.firstWhere(
-              (file) => file.toLowerCase() == 'readme.md',
+          (file) => file.toLowerCase() == 'readme.md',
           orElse: () => '',
         );
 
-        if (readmeFile.isNotEmpty && tools.any((tool) => tool.name == 'readFile')) {
-          logToConsoleAndFile('\n--- README.md 파일 읽기 ---', _logger, logSink);
+        if (readmeFile.isNotEmpty &&
+            tools.any((tool) => tool.name == 'readFile')) {
+          logToConsoleAndFile(
+            '\n--- Reading README.md File ---',
+            logger,
+            logSink,
+          );
 
           final readResult = await client.callTool('readFile', {
-            'path': '${Directory.current.path}/$readmeFile'
+            'path': '${Directory.current.path}/$readmeFile',
           });
 
           if (readResult.isError == true) {
-            logToConsoleAndFile('오류: ${(readResult.content.first as TextContent).text}', _logger, logSink);
+            logToConsoleAndFile(
+              '오류: ${(readResult.content.first as TextContent).text}',
+              logger,
+              logSink,
+            );
           } else {
             final content = (readResult.content.first as TextContent).text;
 
-            // 내용이 너무 길 경우 일부만 표시
+            // Display only partial content if too long
             if (content.length > 500) {
-              logToConsoleAndFile('${content.substring(0, 500)}...\n(내용이 너무 길어 일부만 표시)', _logger, logSink);
+              logToConsoleAndFile(
+                '${content.substring(0, 500)}...\n(Content too long, showing partial content)',
+                logger,
+                logSink,
+              );
             } else {
-              logToConsoleAndFile(content, _logger, logSink);
+              logToConsoleAndFile(content, logger, logSink);
             }
           }
         }
@@ -144,76 +181,96 @@ void main() async {
     }
 
     try {
-      // 리소스 목록 확인
+      // Check resource list
       final resources = await client.listResources();
-      logToConsoleAndFile('\n--- 사용 가능한 리소스 목록 ---', _logger, logSink);
+      logToConsoleAndFile(
+        '\n--- Available Resources List ---',
+        logger,
+        logSink,
+      );
 
       if (resources.isEmpty) {
-        logToConsoleAndFile('사용 가능한 리소스가 없습니다.', _logger, logSink);
+        logToConsoleAndFile('No resources available.', logger, logSink);
       } else {
         for (final resource in resources) {
           logToConsoleAndFile(
-              '리소스: ${resource.name} (${resource.uri})', _logger, logSink);
+            'Resource: ${resource.name} (${resource.uri})',
+            logger,
+            logSink,
+          );
         }
 
-        // 파일 시스템 리소스가 있으면 README.md 파일 읽기
+        // Read README.md file if file system resources exist
         final readmeFile = 'README.md';
         if (await File(readmeFile).exists() &&
             resources.any((resource) => resource.uri.startsWith('file:'))) {
           logToConsoleAndFile(
-              '\n--- 리소스로 README.md 파일 읽기 ---', _logger, logSink);
+            '\n--- Reading README.md File as Resource ---',
+            logger,
+            logSink,
+          );
 
           try {
             final fullPath = '${Directory.current.path}/$readmeFile';
             final resourceResult = await client.readResource(
-                'file://$fullPath');
+              'file://$fullPath',
+            );
 
             if (resourceResult.contents.isEmpty) {
-              logToConsoleAndFile('리소스에 내용이 없습니다.', _logger, logSink);
+              logToConsoleAndFile('Resource has no content.', logger, logSink);
             } else {
               final content = resourceResult.contents.first.text ?? '';
 
-              // 내용이 너무 길 경우 일부만 표시
+              // Display only partial content if too long
               if (content.length > 500) {
                 logToConsoleAndFile(
-                    '${content.substring(0, 500)}...\n(내용이 너무 길어 일부만 표시)',
-                    _logger, logSink);
+                  '${content.substring(0, 500)}...\n(내용이 너무 길어 일부만 표시)',
+                  logger,
+                  logSink,
+                );
               } else {
-                logToConsoleAndFile(content, _logger, logSink);
+                logToConsoleAndFile(content, logger, logSink);
               }
             }
           } catch (e) {
-            logToConsoleAndFile('리소스로 파일 읽기 오류: $e', _logger, logSink);
+            logToConsoleAndFile(
+              'Error reading file as resource: $e',
+              logger,
+              logSink,
+            );
           }
         }
       }
     } catch (e) {
-      logToConsoleAndFile('리소스 목록 확인 기능이 지원되지 않습니다: $e', _logger, logSink);
+      logToConsoleAndFile(
+        'Resource listing feature not supported: $e',
+        logger,
+        logSink,
+      );
     }
 
-    // 잠시 대기 후 종료
+    // Wait briefly before exiting
     await Future.delayed(Duration(seconds: 2));
-    logToConsoleAndFile('\n예제 실행을 완료했습니다.', _logger, logSink);
+    logToConsoleAndFile('\nExample execution completed.', logger, logSink);
 
-    // 클라이언트 연결 종료
+    // Close client connection
     client.disconnect();
-    logToConsoleAndFile('클라이언트 연결이 종료되었습니다.', _logger, logSink);
-
+    logToConsoleAndFile('Client connection closed.', logger, logSink);
   } catch (e, stackTrace) {
-    logToConsoleAndFile('오류: $e', _logger, logSink);
-    logToConsoleAndFile('스택 트레이스: $stackTrace', _logger, logSink);
+    logToConsoleAndFile('오류: $e', logger, logSink);
+    logToConsoleAndFile('Stack trace: $stackTrace', logger, logSink);
   } finally {
-    // 로그 파일 닫기
+    // Close log file
     await logSink.flush();
     await logSink.close();
   }
 }
 
-/// 콘솔과 파일에 동시에 로그 기록
+/// Log to both console and file simultaneously
 void logToConsoleAndFile(String message, Logger logger, IOSink logSink) {
-  // 콘솔에 로그 출력
-  logger.debug(message);
+  // Output log to console
+  logger.info(message);
 
-  // 파일에도 로그 기록
+  // Also log to file
   logSink.writeln(message);
 }
