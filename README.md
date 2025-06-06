@@ -12,23 +12,31 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
 
 ## Features
 
-- Create MCP clients with standardized protocol support
-- Access data through **Resources**
-- Execute functionality through **Tools**
-- Utilize interaction patterns through **Prompts**
-- Support for **Roots** management
-- Support for **Sampling** (LLM text generation)
-- Track **Progress** of long-running operations
-- **Health Monitoring** of server status
-- **Operation Cancellation** for ongoing tasks
-- Multiple transport layers:
-  - Standard I/O for local process communication
-  - Server-Sent Events (SSE) for HTTP-based communication
-- Cross-platform support: Android, iOS, web, Linux, Windows, macOS
+- **MCP Protocol 2025-03-26** - Latest protocol specification support
+- **Unified Transport Configuration** - Simplified transport setup with sealed classes
+- **Enhanced Error Handling** - Result types for robust error management
+- **OAuth 2.1 Authentication** - Built-in OAuth support for secure connections
+- **Multiple Transport Types**:
+  - **STDIO** - Local process communication
+  - **SSE** - Server-Sent Events with authentication, compression, and heartbeat
+  - **HTTP** - Streamable HTTP/2 transport with full feature support
+- **Core MCP Primitives**:
+  - **Resources** - Access server data with templates and subscriptions
+  - **Tools** - Execute server functionality with progress tracking
+  - **Prompts** - Reusable interaction templates
+  - **Roots** - Filesystem boundary management
+  - **Sampling** - LLM text generation requests
+- **Advanced Features**:
+  - **Progress Tracking** - Monitor long-running operations
+  - **Operation Cancellation** - Cancel ongoing tasks
+  - **Batch Processing** - JSON-RPC batch requests
+  - **Connection Monitoring** - Health checks and connection state events
+  - **Resource Subscriptions** - Real-time resource update notifications
+- **Cross-platform support**: Android, iOS, web, Linux, Windows, macOS
 
 ## Protocol Version
 
-This package implements the Model Context Protocol (MCP) specification version `2024-11-05`.
+This package implements the Model Context Protocol (MCP) specification version `2025-03-26`.
 
 The protocol version is crucial for ensuring compatibility between MCP clients and servers. Each release of this package may support different protocol versions, so it's important to:
 
@@ -38,7 +46,8 @@ The protocol version is crucial for ensuring compatibility between MCP clients a
 
 ### Version Compatibility
 
-- Supported protocol version: 2024-11-05
+- Primary protocol version: 2025-03-26
+- Backward compatibility: 2024-11-05
 - Compatibility: Tested with latest MCP server implementations
 
 For the most up-to-date information on protocol versions and compatibility, refer to the [Model Context Protocol specification](https://spec.modelcontextprotocol.io).
@@ -51,7 +60,7 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  mcp_client: ^0.1.8
+  mcp_client: ^1.0.0
 ```
 
 Or install via command line:
@@ -66,29 +75,33 @@ dart pub add mcp_client
 import 'package:mcp_client/mcp_client.dart';
 
 void main() async {
-  // Create a client
-  final client = McpClient.createClient(
+  // Create client configuration
+  final config = McpClient.simpleConfig(
     name: 'Example Client',
     version: '1.0.0',
-    capabilities: ClientCapabilities(
-      roots: true,
-      rootsListChanged: true,
-      sampling: true,
-    ),
+    enableDebugLogging: true,
   );
 
-  // Create a transport
-  final transport = await McpClient.createStdioTransport(
+  // Create transport configuration
+  final transportConfig = TransportConfig.stdio(
     command: 'npx',
     arguments: ['-y', '@modelcontextprotocol/server-filesystem', '/path/to/allowed/directory'],
   );
   
-  // Connect to the server
-  await client.connect(transport);
+  // Create and connect client
+  final clientResult = await McpClient.createAndConnect(
+    config: config,
+    transportConfig: transportConfig,
+  );
+  
+  final client = clientResult.fold(
+    (c) => c,
+    (error) => throw Exception('Failed to connect: $error'),
+  );
   
   // List available tools on the server
   final tools = await client.listTools();
-  _logger.debug('Available tools: ${tools.map((t) => t.name).join(', ')}');
+  print('Available tools: ${tools.map((t) => t.name).join(', ')}');
   
   // Call a tool
   final result = await client.callTool('calculator', {
@@ -96,7 +109,7 @@ void main() async {
     'a': 5,
     'b': 3,
   });
-  _logger.debug('Result: ${(result.content.first as TextContent).text}');
+  print('Result: ${(result.content.first as TextContent).text}');
   
   // Disconnect when done
   client.disconnect();
@@ -110,7 +123,8 @@ void main() async {
 The `Client` is your core interface to the MCP protocol. It handles connection management, protocol compliance, and message routing:
 
 ```dart
-final client = McpClient.createClient(
+// Method 1: Using unified configuration
+final config = McpClient.productionConfig(
   name: 'My App',
   version: '1.0.0',
   capabilities: ClientCapabilities(
@@ -119,6 +133,14 @@ final client = McpClient.createClient(
     sampling: true,
   ),
 );
+
+final clientResult = await McpClient.createAndConnect(
+  config: config,
+  transportConfig: transportConfig,
+);
+
+// Method 2: Manual client creation
+final client = McpClient.createClient(config);
 ```
 ### Connection State Monitoring
 
@@ -334,49 +356,146 @@ _logger.debug('Uptime: ${health.uptime.inMinutes} minutes');
 
 ## Transport Layers
 
+MCP Client supports multiple transport types with unified configuration. Each transport automatically supports advanced features like OAuth authentication, compression, and heartbeat monitoring.
+
 ### Standard I/O
 
 For command-line tools and direct integrations:
 
 ```dart
-final transport = await McpClient.createStdioTransport(
-command: 'npx',
-arguments: ['-y', '@modelcontextprotocol/server-filesystem', '/path/to/allowed/directory'],
-workingDirectory: '/path/to/working/directory',
-environment: {'ENV_VAR': 'value'},
+// Method 1: Using createAndConnect
+final config = McpClient.simpleConfig(name: 'STDIO Client', version: '1.0.0');
+final transportConfig = TransportConfig.stdio(
+  command: 'npx',
+  arguments: ['-y', '@modelcontextprotocol/server-filesystem', '/path/to/allowed/directory'],
+  workingDirectory: '/path/to/working/directory',
+  environment: {'ENV_VAR': 'value'},
 );
+
+final clientResult = await McpClient.createAndConnect(
+  config: config,
+  transportConfig: transportConfig,
+);
+
+// Method 2: Manual transport creation
+final transportResult = await McpClient.createStdioTransport(
+  command: 'npx',
+  arguments: ['-y', '@modelcontextprotocol/server-filesystem', '/path/to/allowed/directory'],
+);
+final transport = transportResult.fold((t) => t, (error) => throw error);
 await client.connect(transport);
 ```
 
 ### Server-Sent Events (SSE)
 
-For HTTP-based communication:
+For HTTP-based communication with enhanced features:
 
 ```dart
-final transport = McpClient.createSseTransport(
+// Basic SSE transport
+final transportConfig = TransportConfig.sse(
   serverUrl: 'http://localhost:8080/sse',
-  headers: {'Authorization': 'Bearer token'},
+  headers: {'User-Agent': 'MCP-Client/1.0'},
 );
-await client.connect(transport);
+
+// SSE with Bearer token authentication
+final transportConfig = TransportConfig.sse(
+  serverUrl: 'https://secure-api.example.com/sse',
+  bearerToken: 'your-bearer-token',
+  headers: {'User-Agent': 'MCP-Client/1.0'},
+);
+
+// SSE with OAuth authentication
+final transportConfig = TransportConfig.sse(
+  serverUrl: 'https://api.example.com/sse',
+  oauthConfig: OAuthConfig(
+    authorizationEndpoint: 'https://auth.example.com/authorize',
+    tokenEndpoint: 'https://auth.example.com/token',
+    clientId: 'your-client-id',
+  ),
+);
+
+// SSE with compression
+final transportConfig = TransportConfig.sse(
+  serverUrl: 'http://localhost:8080/sse',
+  enableCompression: true,
+  enableGzip: true,
+  enableDeflate: true,
+);
+
+// SSE with heartbeat monitoring
+final transportConfig = TransportConfig.sse(
+  serverUrl: 'http://localhost:8080/sse',
+  heartbeatInterval: const Duration(seconds: 30),
+  maxMissedHeartbeats: 3,
+);
+
+final clientResult = await McpClient.createAndConnect(
+  config: config,
+  transportConfig: transportConfig,
+);
+```
+
+### Streamable HTTP Transport
+
+For high-performance HTTP/2 communication:
+
+```dart
+// Basic HTTP transport
+final transportConfig = TransportConfig.streamableHttp(
+  baseUrl: 'https://api.example.com',
+  headers: {'User-Agent': 'MCP-Client/1.0'},
+);
+
+// HTTP with all features
+final transportConfig = TransportConfig.streamableHttp(
+  baseUrl: 'https://api.example.com',
+  headers: {'User-Agent': 'MCP-Client/1.0'},
+  timeout: const Duration(seconds: 60),
+  maxConcurrentRequests: 20,
+  useHttp2: true,
+  oauthConfig: OAuthConfig(
+    authorizationEndpoint: 'https://auth.example.com/authorize',
+    tokenEndpoint: 'https://auth.example.com/token',
+    clientId: 'your-client-id',
+  ),
+  enableCompression: true,
+  heartbeatInterval: const Duration(seconds: 60),
+);
+
+final clientResult = await McpClient.createAndConnect(
+  config: config,
+  transportConfig: transportConfig,
+);
 ```
 
 ## Logging
 
-The package includes a built-in logging utility:
+The package uses the standard Dart logging package:
 
 ```dart
-/// Logging
-final Logger _logger = Logger.getLogger('mcp_client.test');
-_logger.setLevel(LogLevel.debug);
+import 'package:logging/logging.dart';
 
-// Configure logging
-_logger.configure(level: LogLevel.debug, includeTimestamp: true, useColor: true);
+// Set up logging
+Logger.root.level = Level.INFO;
+Logger.root.onRecord.listen((record) {
+  print('${record.level.name}: ${record.time}: ${record.message}');
+});
+
+// Create logger for your component
+final Logger _logger = Logger('mcp_client.example');
 
 // Log messages at different levels
-_logger.debug('Debugging information');
+_logger.fine('Debugging information');
 _logger.info('Important information');
 _logger.warning('Warning message');
-_logger.error('Error message');
+_logger.severe('Error message');
+
+// Enable debug logging in client config
+final config = McpClient.simpleConfig(
+  name: 'My Client',
+  version: '1.0.0',
+  enableDebugLogging: true, // This enables detailed transport logging
+);
 ```
 
 ## MCP Primitives
@@ -431,13 +550,49 @@ client.onLogging((level, message, logger, data) {
 
 ### Error Handling
 
+The library uses Result types for robust error handling:
+
 ```dart
+// Using createAndConnect with Result handling
+final clientResult = await McpClient.createAndConnect(
+  config: config,
+  transportConfig: transportConfig,
+);
+
+final client = clientResult.fold(
+  (client) {
+    print('Successfully connected');
+    return client;
+  },
+  (error) {
+    print('Connection failed: $error');
+    throw error;
+  },
+);
+
+// Transport creation with Result handling
+final transportResult = await McpClient.createStdioTransport(
+  command: 'npx',
+  arguments: ['-y', '@modelcontextprotocol/server-filesystem'],
+);
+
+await transportResult.fold(
+  (transport) async {
+    await client.connect(transport);
+    print('Connected successfully');
+  },
+  (error) {
+    print('Transport creation failed: $error');
+  },
+);
+
+// Traditional try-catch for MCP protocol errors
 try {
   await client.callTool('unknown-tool', {});
 } on McpError catch (e) {
-  _logger.debug('MCP error (${e.code}): ${e.message}');
+  print('MCP error (${e.code}): ${e.message}');
 } catch (e) {
-  _logger.debug('Unexpected error: $e');
+  print('Unexpected error: $e');
 }
 ```
 
