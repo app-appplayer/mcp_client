@@ -184,9 +184,12 @@ class Tool {
       'description': description,
       'inputSchema': inputSchema,
     };
-    if (supportsProgress == true) json['supportsProgress'] = supportsProgress;
-    if (supportsCancellation == true)
+    if (supportsProgress == true) {
+      json['supportsProgress'] = supportsProgress;
+    }
+    if (supportsCancellation == true) {
       json['supportsCancellation'] = supportsCancellation;
+    }
     if (metadata != null) json['metadata'] = metadata!;
     return json;
   }

@@ -82,10 +82,10 @@ class StreamableHttpClientTransport implements ClientTransport {
     required http.Client httpClient,
     HttpOAuthClient? oauthClient,
     OAuthTokenManager? tokenManager,
-  })  : _httpClient = httpClient,
-        _oauthClient = oauthClient,
-        _tokenManager = tokenManager,
-        _requestSemaphore = Semaphore(config.maxConcurrentRequests);
+  }) : _httpClient = httpClient,
+       _oauthClient = oauthClient,
+       _tokenManager = tokenManager,
+       _requestSemaphore = Semaphore(config.maxConcurrentRequests);
 
   /// Create a new Streamable HTTP transport
   static Future<StreamableHttpClientTransport> create({
@@ -240,10 +240,7 @@ class StreamableHttpClientTransport implements ClientTransport {
           _messageController.add({
             'jsonrpc': '2.0',
             'id': requestId,
-            'error': {
-              'code': 32600,
-              'message': 'Session terminated',
-            },
+            'error': {'code': 32600, 'message': 'Session terminated'},
           });
         }
         return;
@@ -307,7 +304,10 @@ class StreamableHttpClientTransport implements ClientTransport {
   }
 
   /// Handle SSE response from POST request
-  Future<void> _handleSseResponse(http.Response response, int? requestId) async {
+  Future<void> _handleSseResponse(
+    http.Response response,
+    int? requestId,
+  ) async {
     _logger.debug('Handling SSE response');
     // Use bodyBytes for proper UTF-8 handling
     final bytes = response.bodyBytes;

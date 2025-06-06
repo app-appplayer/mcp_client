@@ -260,10 +260,12 @@ class BatchUtils {
     if (batch.isEmpty) return false;
     for (final item in batch) {
       if (item is! Map<String, dynamic>) return false;
-      if (!item.containsKey('jsonrpc') || item['jsonrpc'] != '2.0')
+      if (!item.containsKey('jsonrpc') || item['jsonrpc'] != '2.0') {
         return false;
-      if (!item.containsKey('method') || item['method'] is! String)
+      }
+      if (!item.containsKey('method') || item['method'] is! String) {
         return false;
+      }
     }
     return true;
   }
