@@ -3,12 +3,14 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io'
+    show HttpClient, HttpClientRequest, HttpClientResponse, ContentType;
 
 import '../../logger.dart';
 import '../auth/oauth.dart';
 import '../models/models.dart';
 import 'transport.dart';
+import 'event_source.dart';
 
 final Logger _logger = Logger('mcp_client.sse_auth_transport');
 
@@ -394,7 +396,7 @@ class SseAuthClientTransport implements ClientTransport {
 }
 
 /// Authenticated EventSource implementation
-class AuthenticatedEventSource {
+class AuthenticatedEventSource implements EventSource {
   HttpClient? _client;
   HttpClientRequest? _request;
   HttpClientResponse? _response;
@@ -402,14 +404,20 @@ class AuthenticatedEventSource {
   final _buffer = StringBuffer();
   bool _isConnected = false;
 
+  @override
   bool get isConnected => _isConnected;
 
+  @override
+  HttpClientResponse? get response => _response;
+
+  @override
   Future<void> connect(
     String url, {
     Map<String, String>? headers,
     Function(String?)? onOpen,
     Function(dynamic)? onMessage,
     Function(dynamic)? onError,
+    Function(String?)? onEndpoint,
     Function(int, String)? onAuthFailure,
   }) async {
     _logger.debug('AuthenticatedEventSource connecting to: $url');
@@ -606,6 +614,7 @@ class AuthenticatedEventSource {
     return _SseEvent(currentEvent, currentData);
   }
 
+  @override
   void close() {
     _logger.debug('Closing AuthenticatedEventSource');
 

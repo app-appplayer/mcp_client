@@ -3,7 +3,8 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io'
+    show ContentType, HttpClient, HttpClientRequest, HttpClientResponse;
 
 import '../../logger.dart';
 import '../models/models.dart';

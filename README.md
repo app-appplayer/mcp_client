@@ -11,6 +11,10 @@ If you find this package useful, consider supporting ongoing development on Patr
 - [`mcp_server`](https://pub.dev/packages/mcp_server): Exposes tools, resources, and prompts to LLMs. Acts as the AI server.
 - [`mcp_client`](https://pub.dev/packages/mcp_client): Connects Flutter/Dart apps to MCP servers. Acts as the client interface.
 - [`mcp_llm`](https://pub.dev/packages/mcp_llm): Bridges LLMs (Claude, OpenAI, etc.) to MCP clients/servers. Acts as the LLM brain.
+- [`flutter_mcp`](https://pub.dev/packages/flutter_mcp): Complete Flutter plugin for MCP integration with platform features.
+- [`flutter_mcp_ui_core`](https://pub.dev/packages/flutter_mcp_ui_core): Core models, constants, and utilities for Flutter MCP UI system. 
+- [`flutter_mcp_ui_runtime`](https://pub.dev/packages/flutter_mcp_ui_runtime): Comprehensive runtime for building dynamic, reactive UIs through JSON specifications.
+- [`flutter_mcp_ui_generator`](https://pub.dev/packages/flutter_mcp_ui_generator): JSON generation toolkit for creating UI definitions with templates and fluent API. 
 
 ---
 
@@ -23,9 +27,9 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
 - **Enhanced Error Handling** - Result types for robust error management
 - **OAuth 2.1 Authentication** - Built-in OAuth support for secure connections
 - **Multiple Transport Types**:
-  - **STDIO** - Local process communication
-  - **SSE** - Server-Sent Events with authentication, compression, and heartbeat
-  - **HTTP** - Streamable HTTP/2 transport with full feature support
+  - **STDIO** - Local process communication (native platforms only)
+  - **SSE** - Server-Sent Events with authentication, compression, and heartbeat (web and native)
+  - **HTTP** - Streamable HTTP/2 transport with full feature support (web and native)
 - **Core MCP Primitives**:
   - **Resources** - Access server data with templates and subscriptions
   - **Tools** - Execute server functionality with progress tracking
@@ -39,6 +43,7 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
   - **Connection Monitoring** - Health checks and connection state events
   - **Resource Subscriptions** - Real-time resource update notifications
 - **Cross-platform support**: Android, iOS, web, Linux, Windows, macOS
+  - **Web Platform**: SSE and StreamableHTTP transports fully supported; STDIO is native-only
 
 ## Protocol Version
 
@@ -66,7 +71,7 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  mcp_client: ^1.0.0
+  mcp_client: ^1.0.1
 ```
 
 Or install via command line:

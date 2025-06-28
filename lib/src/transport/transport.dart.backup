@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:io' show Process, HttpClient, ContentType;
+import 'dart:io' show Process, ProcessResult;
 
 import '../../logger.dart';
 import '../models/models.dart';
@@ -431,4 +431,218 @@ class SseClientTransport implements ClientTransport {
     final random = (timestamp % 100000).toString().padLeft(5, '0');
     return '${timestamp.toRadixString(16)}$random';
   }
+}
+
+/// SseEvent class moved here from event_source_io.dart
+class SseEvent {
+  final String? event;
+  final String? data;
+  final String? id;
+
+  SseEvent({this.event, this.data, this.id});
+}
+      _request = await _client!.getUrl(Uri.parse(url));
+
+      // Set up MCP standard SSE headers
+      _request!.headers.set('Accept', 'text/event-stream');
+      _request!.headers.set('Cache-Control', 'no-cache');
+      _request!.headers.set(
+        'Accept-Encoding',
+        'identity',
+      ); // Disable compression
+      if (headers != null) {
+        headers.forEach((key, value) {
+          _request!.headers.set(key, value);
+        });
+      }
+
+      _response = await _request!.close();
+
+      if (_response!.statusCode != 200) {
+        final body = await _response!.transform(utf8.decoder).join();
+        throw McpError(
+          'Failed to connect to SSE endpoint: ${_response!.statusCode} - $body',
+        );
+      }
+
+      _isConnected = true;
+      _logger.debug('EventSource connection established');
+
+      // Set up subscription to process events with proper UTF-8 handling
+      _subscription = _response!.listen(
+        (List<int> data) {
+          try {
+            // Convert bytes to string using UTF-8 decoder
+            final chunk = utf8.decode(data, allowMalformed: true);
+            // Log raw data for debugging
+            _logger.debug('Raw SSE data: [$chunk]');
+            _buffer.write(chunk);
+
+            // Process all events in buffer
+            final content = _buffer.toString();
+
+            // Simple check for JSON-RPC responses
+            if (content.contains('"jsonrpc":"2.0"') ||
+                content.contains('"jsonrpc": "2.0"')) {
+              _logger.debug('Detected JSON-RPC data in SSE stream');
+
+              try {
+                // Try to extract JSON objects from the stream
+                final jsonStart = content.indexOf('{');
+                final jsonEnd = content.lastIndexOf('}') + 1;
+
+                if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                  final jsonStr = content.substring(jsonStart, jsonEnd);
+                  _logger.debug('Extracted JSON: $jsonStr');
+
+                  try {
+                    final jsonData = jsonDecode(jsonStr);
+                    _logger.debug('Parsed JSON-RPC data: $jsonData');
+
+                    // Clear the processed part from buffer
+                    if (jsonEnd < content.length) {
+                      _buffer.clear();
+                      _buffer.write(content.substring(jsonEnd));
+                    } else {
+                      _buffer.clear();
+                    }
+
+                    // Forward to message handler
+                    if (onMessage != null) {
+                      onMessage(jsonData);
+                    }
+                    return; // Processed JSON data
+                  } catch (e) {
+                    _logger.debug('JSON parse error: $e');
+                  }
+                }
+              } catch (e) {
+                _logger.debug('Error extracting JSON: $e');
+              }
+            }
+
+            // Process SSE events
+            final event = _processBuffer();
+            _logger.debug(
+              'Processed SSE event: ${event.event}, data: ${event.data}',
+            );
+
+            if (event.event == 'endpoint' && event.data != null) {
+              _logger.debug('Received endpoint event: ${event.data}');
+              if (onEndpoint != null) {
+                onEndpoint(event.data);
+              }
+            } else if (event.data != null && onMessage != null) {
+              onMessage(event.data);
+            }
+          } catch (e) {
+            _logger.debug('Error processing SSE data: $e');
+            // Continue processing despite individual chunk errors
+          }
+        },
+        onError: (e) {
+          _logger.debug('EventSource error: $e');
+          _isConnected = false;
+          if (onError != null) {
+            onError(e);
+          }
+        },
+        onDone: () {
+          _logger.debug('EventSource stream closed');
+          _isConnected = false;
+          if (onError != null) {
+            onError('Connection closed');
+          }
+        },
+      );
+    } catch (e) {
+      _logger.debug('EventSource connection error: $e');
+      _isConnected = false;
+      if (onError != null) {
+        onError(e);
+      }
+      rethrow;
+    }
+  }
+
+  // Process the buffer to find SSE events - MCP standard implementation
+  _SseEvent _processBuffer() {
+    final content = _buffer.toString();
+    _logger.debug('_processBuffer content: [$content]');
+
+    if (content.isEmpty) {
+      return _SseEvent('', null);
+    }
+
+    // Split by double newline to find complete events (handle both \n\n and \r\n\r\n)
+    final eventBlocks = content.split(RegExp(r'(\r?\n){2}'));
+    _logger.debug('_processBuffer event blocks count: ${eventBlocks.length}');
+
+    if (eventBlocks.length < 2) {
+      // No complete event yet
+      return _SseEvent('', null);
+    }
+
+    // Process the first complete event block
+    final eventBlock = eventBlocks[0];
+    final lines = eventBlock.split(RegExp(r'\r?\n'));
+
+    String currentEvent = '';
+    String? currentData;
+
+    for (final line in lines) {
+      final trimmedLine = line.trim();
+      _logger.debug('Processing line: [$trimmedLine]');
+
+      if (trimmedLine.startsWith('event:')) {
+        currentEvent = trimmedLine.substring(6).trim();
+        _logger.debug('Found event type: $currentEvent');
+      } else if (trimmedLine.startsWith('data:')) {
+        currentData = trimmedLine.substring(5).trim();
+        _logger.debug('Found event data: $currentData');
+      }
+    }
+
+    // Clear the processed event from buffer
+    final remaining = eventBlocks.skip(1).join('\r\n\r\n');
+    _buffer.clear();
+    if (remaining.isNotEmpty) {
+      _buffer.write(remaining);
+    }
+
+    _logger.debug('Complete event found: $currentEvent, data: $currentData');
+    return _SseEvent(currentEvent, currentData);
+  }
+
+  void close() {
+    _logger.debug('Closing EventSource');
+
+    // Cancel SSE stream listener
+    _subscription?.cancel();
+
+    // Attempt to forcibly close the underlying TCP connection
+    try {
+      _response?.detachSocket().then((socket) {
+        _logger.debug('Detached socket - destroying...');
+        socket.destroy(); // Force-close TCP connection
+      });
+    } catch (e) {
+      _logger.debug('Error detaching socket: $e');
+    }
+
+    // Abort request if it is still active
+    try {
+      _request?.abort();
+    } catch (_) {}
+
+    // Force-close the entire HttpClient including keep-alive pool
+    try {
+      _client?.close(force: true);
+    } catch (_) {}
+
+class _SseEvent {
+  final String event;
+  final String? data;
+
+  _SseEvent(this.event, this.data);
 }

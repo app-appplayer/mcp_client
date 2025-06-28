@@ -4,7 +4,6 @@ library;
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 
@@ -12,6 +11,7 @@ import '../../logger.dart';
 import '../auth/oauth.dart';
 import '../auth/oauth_client.dart';
 import '../models/models.dart';
+import 'event_source.dart';
 import 'transport.dart';
 
 final Logger _logger = Logger('mcp_client.streamable_http_transport');
@@ -70,11 +70,8 @@ class StreamableHttpClientTransport implements ClientTransport {
   final Semaphore _requestSemaphore;
   String? _sessionId;
   final Map<int, Completer<dynamic>> _pendingRequests = {};
-  HttpClient? _sseClient;
-  HttpClientRequest? _sseRequest;
-  HttpClientResponse? _sseResponse;
+  EventSource? _eventSource;
   StreamSubscription? _sseSubscription;
-  final StringBuffer _sseBuffer = StringBuffer();
   bool _getStreamActive = false;
 
   StreamableHttpClientTransport._({
@@ -264,9 +261,8 @@ class StreamableHttpClientTransport implements ClientTransport {
       }
 
       if (response.statusCode >= 400) {
-        throw HttpException(
+        throw McpError(
           'HTTP ${response.statusCode}: ${response.reasonPhrase}',
-          uri: uri,
         );
       }
 
@@ -351,58 +347,55 @@ class StreamableHttpClientTransport implements ClientTransport {
   /// Establish SSE GET stream
   Future<void> _establishGetStream() async {
     try {
-      _sseClient = HttpClient();
       final uri = Uri.parse(config.baseUrl);
-      _sseRequest = await _sseClient!.getUrl(uri);
-
-      // Set headers
-      _sseRequest!.headers.set('Accept', 'text/event-stream');
-      _sseRequest!.headers.set('Cache-Control', 'no-cache');
+      
+      // Set up headers
+      final headers = <String, String>{
+        'Accept': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        ...config.headers,
+      };
+      
       if (_sessionId != null) {
-        _sseRequest!.headers.set('MCP-Session-Id', _sessionId!);
+        headers['MCP-Session-Id'] = _sessionId!;
       }
-      config.headers.forEach((key, value) {
-        _sseRequest!.headers.set(key, value);
-      });
 
       // Add OAuth token if available
       if (_tokenManager != null) {
         try {
           final token = await _tokenManager.getAccessToken();
-          _sseRequest!.headers.set('Authorization', 'Bearer $token');
+          headers['Authorization'] = 'Bearer $token';
         } catch (e) {
           _logger.debug('Failed to add OAuth token to GET stream: $e');
         }
       }
 
-      _sseResponse = await _sseRequest!.close();
-
-      if (_sseResponse!.statusCode != 200) {
-        final body = await _sseResponse!.transform(utf8.decoder).join();
-        throw McpError(
-          'Failed to establish GET stream: ${_sseResponse!.statusCode} - $body',
-        );
-      }
-
-      _logger.debug('GET SSE connection established');
-
-      // Set up subscription to process events
-      _sseSubscription = _sseResponse!.listen(
-        (List<int> data) {
-          try {
-            final chunk = utf8.decode(data, allowMalformed: true);
-            _sseBuffer.write(chunk);
-            _processSseBuffer();
-          } catch (e) {
-            _logger.error('Error processing SSE data: $e');
+      // Create EventSource instance
+      _eventSource = EventSource();
+      
+      // Connect to SSE endpoint
+      await _eventSource!.connect(
+        uri.toString(),
+        headers: headers,
+        onOpen: (_) {
+          _logger.debug('GET SSE connection established');
+        },
+        onMessage: (data) {
+          if (data is Map) {
+            _logger.debug('Received SSE message: $data');
+            _messageController.add(data);
+          } else if (data is String) {
+            try {
+              final message = jsonDecode(data);
+              _logger.debug('Received SSE message: $message');
+              _messageController.add(message);
+            } catch (e) {
+              _logger.debug('Failed to parse SSE message: $data');
+            }
           }
         },
         onError: (error) {
           _logger.error('GET stream error: $error');
-          _getStreamActive = false;
-        },
-        onDone: () {
-          _logger.debug('GET stream closed');
           _getStreamActive = false;
         },
       );
@@ -413,56 +406,6 @@ class StreamableHttpClientTransport implements ClientTransport {
     }
   }
 
-  /// Process SSE buffer for events
-  void _processSseBuffer() {
-    final content = _sseBuffer.toString();
-    if (content.isEmpty) return;
-
-    // Split by double newline to find complete events
-    final eventBlocks = content.split(RegExp(r'(\r?\n){2}'));
-
-    if (eventBlocks.length < 2) {
-      // No complete event yet
-      return;
-    }
-
-    // Process complete events
-    for (int i = 0; i < eventBlocks.length - 1; i++) {
-      final eventBlock = eventBlocks[i];
-      if (eventBlock.isEmpty) continue;
-
-      final lines = eventBlock.split(RegExp(r'\r?\n'));
-      String? eventType;
-      String? eventData;
-
-      for (final line in lines) {
-        if (line.startsWith('event:')) {
-          eventType = line.substring(6).trim();
-        } else if (line.startsWith('data:')) {
-          eventData = line.substring(5).trim();
-        } else if (line.startsWith('id:')) {
-          // eventId = line.substring(3).trim();
-          // TODO: Implement resumption token handling
-        }
-      }
-
-      if (eventType == 'message' && eventData != null) {
-        try {
-          final message = jsonDecode(eventData);
-          _logger.debug('Received SSE message: $message');
-          _messageController.add(message);
-        } catch (e) {
-          _logger.error('Failed to parse SSE message: $e');
-        }
-      }
-    }
-
-    // Keep the incomplete last block in buffer
-    _sseBuffer.clear();
-    if (eventBlocks.isNotEmpty) {
-      _sseBuffer.write(eventBlocks.last);
-    }
-  }
 
   @override
   void close() {
@@ -478,7 +421,7 @@ class StreamableHttpClientTransport implements ClientTransport {
 
     // Close GET stream
     _sseSubscription?.cancel();
-    _sseClient?.close(force: true);
+    _eventSource?.close();
 
     // Complete pending requests with error
     for (final completer in _pendingRequests.values) {

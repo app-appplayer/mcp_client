@@ -1,0 +1,7 @@
+# Test configuration for mcp_client
+platforms:
+  - vm
+  - chrome
+
+# Configure timeouts
+timeout: 2m

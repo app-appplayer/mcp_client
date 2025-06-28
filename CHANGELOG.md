@@ -1,3 +1,11 @@
+## 1.0.1
+
+* Bug Fixes
+  * Fixed SSE endpoint parsing issue where endpoint data was incorrectly processed as null
+  * Added support for SSE events without explicit event type field
+  * Improved compatibility with various SSE server implementations
+  * Fixed web platform SSE implementation to match native platform behavior
+
 ## 1.0.0
 
 * Breaking Changes and Major Update to 2025-03-26 Protocol
