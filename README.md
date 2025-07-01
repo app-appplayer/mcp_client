@@ -2,9 +2,12 @@
 
 ## 🙌 Support This Project
 
-If you find this package useful, consider supporting ongoing development on Patreon.
+If you find this package useful, consider supporting ongoing development on PayPal.
 
-[![Support on Patreon](https://c5.patreon.com/external/logo/become_a_patron_button.png)](https://www.patreon.com/mcpdevstudio)
+[![Donate](https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif)](https://www.paypal.com/ncp/payment/F7G56QD9LSJ92)  
+Support makemind via [PayPal](https://www.paypal.com/ncp/payment/F7G56QD9LSJ92)
+
+---
 
 ### 🔗 MCP Dart Package Family
 
