@@ -93,6 +93,7 @@ class StreamableHttpClientTransport implements ClientTransport {
     int? maxConcurrentRequests,
     bool? useHttp2,
     http.Client? httpClient,
+    bool terminateOnClose = true,  // Default: true for backward compatibility
   }) async {
     final config = StreamableHttpTransportConfig(
       baseUrl: baseUrl,
@@ -101,6 +102,7 @@ class StreamableHttpClientTransport implements ClientTransport {
       timeout: timeout ?? const Duration(seconds: 30),
       maxConcurrentRequests: maxConcurrentRequests ?? 10,
       useHttp2: useHttp2 ?? true,
+      terminateOnClose: terminateOnClose,
     );
 
     final client =
@@ -166,6 +168,12 @@ class StreamableHttpClientTransport implements ClientTransport {
 
   /// Send HTTP request with proper authentication
   Future<void> _sendRequest(dynamic message) async {
+    // Check if transport is closed before sending
+    if (_isClosed) {
+      _logger.debug('Transport closed, ignoring request');
+      return;
+    }
+
     await _requestSemaphore.acquire();
 
     try {
@@ -423,12 +431,8 @@ class StreamableHttpClientTransport implements ClientTransport {
     _sseSubscription?.cancel();
     _eventSource?.close();
 
-    // Complete pending requests with error
-    for (final completer in _pendingRequests.values) {
-      if (!completer.isCompleted) {
-        completer.completeError(McpError('Transport closed'));
-      }
-    }
+    // Clear pending requests without completing them with error
+    // to avoid unhandled exceptions during shutdown
     _pendingRequests.clear();
 
     _messageController.close();

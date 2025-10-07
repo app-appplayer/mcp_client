@@ -1,3 +1,16 @@
+## 1.0.2
+
+* Bug Fixes
+  * Added `terminateOnClose` parameter to StreamableHTTP transport configuration
+    * Allows controlling whether DELETE request is sent on disconnect
+    * Default value is `true` to maintain backward compatibility
+    * Set to `false` to allow reconnection after disconnect without server session termination
+  * Enhanced session validation and localStorage management
+    * Server-side session validation through `hasSession()` check
+    * Automatic localStorage cleanup when session ID changes (server restart detection)
+    * Proper handling of invalid/expired session IDs
+    * Improved reconnection logic for StreamableHTTP transport
+
 ## 1.0.1
 
 * Bug Fixes

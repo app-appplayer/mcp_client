@@ -156,6 +156,7 @@ sealed class TransportConfig {
     bool enableCompression,
     Duration? heartbeatInterval,
     int maxMissedHeartbeats,
+    bool terminateOnClose,  // Whether to send DELETE on disconnect (default: true)
   }) = StreamableHttpTransportConfig;
 }
 
@@ -216,6 +217,7 @@ final class StreamableHttpTransportConfig extends TransportConfig {
   final bool enableCompression;
   final Duration? heartbeatInterval;
   final int maxMissedHeartbeats;
+  final bool terminateOnClose;
 
   const StreamableHttpTransportConfig({
     required this.baseUrl,
@@ -227,6 +229,7 @@ final class StreamableHttpTransportConfig extends TransportConfig {
     this.enableCompression = false,
     this.heartbeatInterval,
     this.maxMissedHeartbeats = 3,
+    this.terminateOnClose = true,  // Default: true for backward compatibility
   });
 }
 
@@ -314,6 +317,7 @@ class McpClient {
         enableCompression: final _,
         heartbeatInterval: final _,
         maxMissedHeartbeats: final _,
+        terminateOnClose: final terminateOnClose,
       ) =>
         StreamableHttpClientTransport.create(
           baseUrl: baseUrl,
@@ -322,6 +326,7 @@ class McpClient {
           maxConcurrentRequests: maxConcurrentRequests,
           useHttp2: useHttp2,
           oauthConfig: oauthConfig,
+          terminateOnClose: terminateOnClose,
         ),
     };
   }

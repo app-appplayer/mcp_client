@@ -18,6 +18,7 @@ Support makemind via [PayPal](https://www.paypal.com/ncp/payment/F7G56QD9LSJ92)
 - [`flutter_mcp_ui_core`](https://pub.dev/packages/flutter_mcp_ui_core): Core models, constants, and utilities for Flutter MCP UI system. 
 - [`flutter_mcp_ui_runtime`](https://pub.dev/packages/flutter_mcp_ui_runtime): Comprehensive runtime for building dynamic, reactive UIs through JSON specifications.
 - [`flutter_mcp_ui_generator`](https://pub.dev/packages/flutter_mcp_ui_generator): JSON generation toolkit for creating UI definitions with templates and fluent API. 
+- [`mcp_flow_runtime`](https://pub.dev/packages/mcp_flow_runtime): Declarative runtime for hardware control and IoT orchestration using MCP Flow DSL.
 
 ---
 
@@ -45,6 +46,8 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
   - **Batch Processing** - JSON-RPC batch requests
   - **Connection Monitoring** - Health checks and connection state events
   - **Resource Subscriptions** - Real-time resource update notifications
+  - **Session Management** - Automatic session validation and reconnection support
+  - **State Persistence** - Smart localStorage management with server restart detection
 - **Cross-platform support**: Android, iOS, web, Linux, Windows, macOS
   - **Web Platform**: SSE and StreamableHTTP transports fully supported; STDIO is native-only
 
@@ -74,7 +77,7 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  mcp_client: ^1.0.1
+  mcp_client: ^1.0.2
 ```
 
 Or install via command line:
