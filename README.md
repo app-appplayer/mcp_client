@@ -41,6 +41,7 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
   - **Roots** - Filesystem boundary management
   - **Sampling** - LLM text generation requests
 - **Advanced Features**:
+  - **Deferred Tool Loading** - Token-efficient tool metadata for LLM context (60-80% reduction)
   - **Progress Tracking** - Monitor long-running operations
   - **Operation Cancellation** - Cancel ongoing tasks
   - **Batch Processing** - JSON-RPC batch requests
@@ -77,7 +78,7 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  mcp_client: ^1.0.2
+  mcp_client: ^1.1.0
 ```
 
 Or install via command line:
@@ -526,6 +527,34 @@ The MCP protocol defines three core primitives that clients can interact with:
 | Tools     | Model-controlled      | Functions exposed to the LLM to take actions        | API calls, data updates      |
 
 ## Advanced Usage
+
+### Deferred Tool Loading
+
+Reduce token usage by 60-80% when sending tool definitions to LLMs:
+
+```dart
+import 'package:mcp_client/mcp_client.dart';
+
+// Create a tool registry for caching
+final registry = ToolRegistry();
+
+// Fetch lightweight metadata instead of full schemas
+final metadata = await client.listToolsMetadata(registry);
+
+// Send only name + description to LLM (token-efficient)
+for (final tool in metadata) {
+  print('${tool.name}: ${tool.description}');
+}
+
+// Later, get full schema when needed for validation/execution
+final fullSchema = registry.getSchema('calculator');
+print('Full schema: $fullSchema');
+
+// Invalidate cache when tools change
+client.onToolsListChanged(() {
+  registry.invalidateAll();
+});
+```
 
 ### Event Handling
 

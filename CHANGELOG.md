@@ -1,3 +1,13 @@
+## 1.1.0
+
+* New Features
+  * Deferred Tool Loading support (Progressive Tool Disclosure)
+    * `ToolMetadata` - Lightweight tool representation (name + description only)
+    * `ToolRegistry` - Cache layer for tool definitions with metadata extraction
+    * `ClientToolMetadataExtension` - Extension for easy metadata access
+    * Reduces token usage by 60-80% when sending tool definitions to LLMs
+    * Zero breaking changes - fully backward compatible, opt-in only
+
 ## 1.0.2
 
 * Bug Fixes

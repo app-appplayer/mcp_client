@@ -1637,3 +1637,110 @@ class ProgressNotification {
     );
   }
 }
+
+// ============================================================================
+// Deferred Loading Support (Progressive Tool Disclosure)
+// ============================================================================
+
+/// Lightweight tool metadata (name + description only)
+/// Used for token-efficient LLM context in deferred loading mode
+@immutable
+class ToolMetadata {
+  final String name;
+  final String description;
+
+  const ToolMetadata({
+    required this.name,
+    required this.description,
+  });
+
+  /// Create from Tool object
+  factory ToolMetadata.fromTool(Tool tool) => ToolMetadata(
+        name: tool.name,
+        description: tool.description,
+      );
+
+  /// Create from Map (for compatibility with McpClientManager.getTools())
+  factory ToolMetadata.fromMap(Map<String, dynamic> map) => ToolMetadata(
+        name: map['name'] as String,
+        description: map['description'] as String? ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'description': description,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ToolMetadata &&
+          name == other.name &&
+          description == other.description;
+
+  @override
+  int get hashCode => Object.hash(name, description);
+
+  @override
+  String toString() => 'ToolMetadata(name: $name, description: $description)';
+}
+
+/// Cache layer for tool definitions
+/// Provides metadata extraction and full schema lookup
+/// LLM-agnostic: can be used without mcp_llm
+class ToolRegistry {
+  final Map<String, ToolMetadata> _metadata = {};
+  final Map<String, Map<String, dynamic>> _schemas = {};
+  bool _initialized = false;
+
+  /// Cache tools from Map list (McpClientManager.getTools() result)
+  void cacheFromMaps(List<Map<String, dynamic>> tools) {
+    _metadata.clear();
+    _schemas.clear();
+    for (final tool in tools) {
+      final name = tool['name'] as String;
+      _metadata[name] = ToolMetadata.fromMap(tool);
+      _schemas[name] = Map<String, dynamic>.from(tool);
+    }
+    _initialized = true;
+  }
+
+  /// Cache tools from Tool list (Client.listTools() result)
+  void cacheFromTools(List<Tool> tools) {
+    _metadata.clear();
+    _schemas.clear();
+    for (final tool in tools) {
+      _metadata[tool.name] = ToolMetadata.fromTool(tool);
+      _schemas[tool.name] = tool.toJson();
+    }
+    _initialized = true;
+  }
+
+  /// Check if registry is initialized
+  bool get isInitialized => _initialized;
+
+  /// Get all metadata (lightweight, for LLM context)
+  List<ToolMetadata> getAllMetadata() => _metadata.values.toList();
+
+  /// Get metadata for specific tool
+  ToolMetadata? getMetadata(String toolName) => _metadata[toolName];
+
+  /// Get full tool schema as Map (for execution/validation)
+  Map<String, dynamic>? getSchema(String toolName) => _schemas[toolName];
+
+  /// Check if tool exists
+  bool hasTool(String toolName) => _schemas.containsKey(toolName);
+
+  /// Get all tool names
+  List<String> get toolNames => _schemas.keys.toList();
+
+  /// Clear cache (call on tools/list_changed notification)
+  void invalidateAll() {
+    _metadata.clear();
+    _schemas.clear();
+    _initialized = false;
+  }
+
+  /// Get tool count
+  int get count => _schemas.length;
+}

@@ -967,3 +967,26 @@ class ToolCallTracking {
 
   ToolCallTracking({this.operationId, required this.result});
 }
+
+// ============================================================================
+// Deferred Loading Support Extension
+// ============================================================================
+
+/// Extension on Client for easy metadata access in deferred loading mode
+extension ClientToolMetadataExtension on Client {
+  /// Fetch tools and return metadata only
+  /// Caches full tools in provided registry for later schema lookup
+  ///
+  /// Usage:
+  /// ```dart
+  /// final registry = ToolRegistry();
+  /// final metadata = await client.listToolsMetadata(registry);
+  /// // Use metadata for LLM context (token-efficient)
+  /// // Later, use registry.getSchema(toolName) for full schema
+  /// ```
+  Future<List<ToolMetadata>> listToolsMetadata(ToolRegistry registry) async {
+    final tools = await listTools();
+    registry.cacheFromTools(tools);
+    return registry.getAllMetadata();
+  }
+}
