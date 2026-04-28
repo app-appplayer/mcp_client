@@ -1,27 +1,5 @@
 # MCP Client
 
-## 🙌 Support This Project
-
-If you find this package useful, consider supporting ongoing development on PayPal.
-
-[![Donate](https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif)](https://www.paypal.com/ncp/payment/F7G56QD9LSJ92)  
-Support makemind via [PayPal](https://www.paypal.com/ncp/payment/F7G56QD9LSJ92)
-
----
-
-### 🔗 MCP Dart Package Family
-
-- [`mcp_server`](https://pub.dev/packages/mcp_server): Exposes tools, resources, and prompts to LLMs. Acts as the AI server.
-- [`mcp_client`](https://pub.dev/packages/mcp_client): Connects Flutter/Dart apps to MCP servers. Acts as the client interface.
-- [`mcp_llm`](https://pub.dev/packages/mcp_llm): Bridges LLMs (Claude, OpenAI, etc.) to MCP clients/servers. Acts as the LLM brain.
-- [`flutter_mcp`](https://pub.dev/packages/flutter_mcp): Complete Flutter plugin for MCP integration with platform features.
-- [`flutter_mcp_ui_core`](https://pub.dev/packages/flutter_mcp_ui_core): Core models, constants, and utilities for Flutter MCP UI system. 
-- [`flutter_mcp_ui_runtime`](https://pub.dev/packages/flutter_mcp_ui_runtime): Comprehensive runtime for building dynamic, reactive UIs through JSON specifications.
-- [`flutter_mcp_ui_generator`](https://pub.dev/packages/flutter_mcp_ui_generator): JSON generation toolkit for creating UI definitions with templates and fluent API. 
-- [`mcp_flow_runtime`](https://pub.dev/packages/mcp_flow_runtime): Declarative runtime for hardware control and IoT orchestration using MCP Flow DSL.
-
----
-
 A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) clients. This plugin allows Flutter applications to connect with MCP servers and access data, functionality, and interaction patterns from Large Language Model (LLM) applications in a standardized way.
 
 ## Features
@@ -71,21 +49,6 @@ The protocol version is crucial for ensuring compatibility between MCP clients a
 For the most up-to-date information on protocol versions and compatibility, refer to the [Model Context Protocol specification](https://spec.modelcontextprotocol.io).
 
 ## Getting Started
-
-### Installation
-
-Add the package to your `pubspec.yaml`:
-
-```yaml
-dependencies:
-  mcp_client: ^1.1.0
-```
-
-Or install via command line:
-
-```bash
-dart pub add mcp_client
-```
 
 ### Basic Usage
 
@@ -645,16 +608,6 @@ try {
 ## Additional Examples
 
 Check out the [example](https://github.com/app-appplayer/mcp_client/tree/main/example) directory for a complete sample application.
-
-## Related Articles
-
-- [Building a Model Context Protocol Server with Dart: Connecting to Claude Desktop](https://dev.to/mcpdevstudio/building-a-model-context-protocol-server-with-dart-connecting-to-claude-desktop-2aad)
-- [Building a Model Context Protocol Client with Dart: A Comprehensive Guide](https://dev.to/mcpdevstudio/building-a-model-context-protocol-client-with-dart-a-comprehensive-guide-4fdg)
-- [Integrating AI with Flutter: A Comprehensive Guide to mcp_llm
-](https://dev.to/mcpdevstudio/integrating-ai-with-flutter-a-comprehensive-guide-to-mcpllm-32f8)
-- [Integrating AI with Flutter: Building Powerful Apps with LlmClient and mcp_client](https://dev.to/mcpdevstudio/integrating-ai-with-flutter-building-powerful-apps-with-llmclient-and-mcpclient-5b0i)
-- [Integrating AI with Flutter: Creating AI Services with LlmServer and mcp_server](https://dev.to/mcpdevstudio/integrating-ai-with-flutter-creating-ai-services-with-llmserver-and-mcpserver-5084)
-- [Integrating AI with Flutter: Connecting Multiple LLM Providers to MCP Ecosystem](https://dev.to/mcpdevstudio/integrating-ai-with-flutter-connecting-multiple-llm-providers-to-mcp-ecosystem-c3l)
 
 ## Resources
 
