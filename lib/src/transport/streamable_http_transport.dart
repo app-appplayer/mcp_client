@@ -11,6 +11,7 @@ import '../../logger.dart';
 import '../auth/oauth.dart';
 import '../auth/oauth_client.dart';
 import '../models/models.dart';
+import '../protocol/protocol.dart';
 import 'event_source.dart';
 import 'transport.dart';
 
@@ -69,6 +70,7 @@ class StreamableHttpClientTransport implements ClientTransport {
   bool _isClosed = false;
   final Semaphore _requestSemaphore;
   String? _sessionId;
+  String? _protocolVersion;
   final Map<int, Completer<dynamic>> _pendingRequests = {};
   EventSource? _eventSource;
   StreamSubscription? _sseSubscription;
@@ -83,6 +85,13 @@ class StreamableHttpClientTransport implements ClientTransport {
        _oauthClient = oauthClient,
        _tokenManager = tokenManager,
        _requestSemaphore = Semaphore(config.maxConcurrentRequests);
+
+  /// Spec 2025-06-18+: record the negotiated MCP protocol version so
+  /// every post-handshake HTTP request carries
+  /// `MCP-Protocol-Version: <version>`.
+  void setProtocolVersion(String version) {
+    _protocolVersion = version;
+  }
 
   /// Create a new Streamable HTTP transport
   static Future<StreamableHttpClientTransport> create({
@@ -187,6 +196,14 @@ class StreamableHttpClientTransport implements ClientTransport {
       // Add session ID if available
       if (_sessionId != null) {
         headers['MCP-Session-Id'] = _sessionId!;
+      }
+
+      // Spec 2025-06-18+: every post-handshake HTTP request MUST carry
+      // the negotiated protocol version. Older revisions ignore this
+      // header. Set via [setProtocolVersion] after initialize.
+      if (_protocolVersion != null &&
+          McpProtocol.requiresProtocolHeader(_protocolVersion!)) {
+        headers['MCP-Protocol-Version'] = _protocolVersion!;
       }
 
       // Add OAuth token if available

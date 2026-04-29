@@ -4,6 +4,7 @@ import 'dart:convert';
 import '../../logger.dart';
 import '../models/models.dart';
 import '../protocol/protocol.dart';
+import '../transport/streamable_http_transport.dart';
 import '../transport/transport.dart';
 
 final Logger _logger = Logger('mcp_client.client');
@@ -299,12 +300,32 @@ class Client {
           : {},
     );
 
+    // Capture the negotiated revision and inform the transport so HTTP
+    // implementations can stamp `MCP-Protocol-Version: <version>` on
+    // every post-handshake request (spec 2025-06-18+).
+    if (serverProtoVersion is String) {
+      _negotiatedProtocolVersion = serverProtoVersion;
+      // HTTP transports attach `MCP-Protocol-Version` to subsequent
+      // requests when the negotiated revision is 2025-06-18+. Other
+      // transports (stdio / SSE) ignore the header so we only forward
+      // when the concrete transport exposes the setter.
+      final tx = _transport;
+      if (tx is StreamableHttpClientTransport) {
+        tx.setProtocolVersion(serverProtoVersion);
+      }
+    }
+
     // Send initialized notification
     _sendNotification('notifications/initialized', {});
 
     _initialized = true;
     _logger.debug('Initialization complete');
   }
+
+  /// Negotiated protocol revision after initialize completes; null
+  /// before then.
+  String? get negotiatedProtocolVersion => _negotiatedProtocolVersion;
+  String? _negotiatedProtocolVersion;
 
   /// Validate protocol version compatibility
   void _validateProtocolVersion(String serverProtoVersion) {

@@ -123,59 +123,10 @@ void main() {
       });
     });
 
-    group('JSON-RPC Batching Tests', () {
-      test('Batching transport wraps requests', () {
-        final batchTransport = BatchingClientTransport(mockTransport);
-
-        expect(batchTransport.maxBatchSize, equals(10));
-        expect(
-          batchTransport.batchTimeout,
-          equals(const Duration(milliseconds: 100)),
-        );
-      });
-
-      test('BatchUtils creates batches correctly', () {
-        final requests = [
-          {'jsonrpc': '2.0', 'id': 1, 'method': 'test1'},
-          {'jsonrpc': '2.0', 'id': 2, 'method': 'test2'},
-          {'jsonrpc': '2.0', 'id': 3, 'method': 'test3'},
-        ];
-
-        final batch = BatchUtils.createBatch(requests);
-        expect(batch.requests.length, equals(3));
-        expect(batch.isFull, isFalse);
-        expect(batch.isEmpty, isFalse);
-      });
-
-      test('BatchUtils splits large batches', () {
-        final requests = List.generate(
-          25,
-          (i) => {'jsonrpc': '2.0', 'id': i + 1, 'method': 'test_${i + 1}'},
-        );
-
-        final batches = BatchUtils.splitBatch(
-          BatchUtils.createBatch(requests),
-          10,
-        );
-
-        expect(batches.length, equals(3));
-        expect(batches[0].requests.length, equals(10));
-        expect(batches[1].requests.length, equals(10));
-        expect(batches[2].requests.length, equals(5));
-      });
-
-      test('BatchUtils validates batch structure', () {
-        final validBatch = [
-          {'jsonrpc': '2.0', 'id': 1, 'method': 'test'},
-        ];
-        expect(BatchUtils.isValidBatch(validBatch), isTrue);
-
-        final invalidBatch = [
-          {'id': 1, 'method': 'test'}, // Missing jsonrpc
-        ];
-        expect(BatchUtils.isValidBatch(invalidBatch), isFalse);
-      });
-    });
+    // JSON-RPC batching was removed in MCP 2025-06-18 (PR #416). The
+    // `BatchingClientTransport` and `BatchUtils` helpers were dropped in
+    // 2.0; older negotiated revisions on the server side still accept
+    // batches but the client no longer constructs them.
 
     group('Enhanced Tool Features Tests', () {
       test('Tool annotations are preserved', () async {

@@ -19,7 +19,6 @@ export 'src/transport/sse_auth_transport.dart';
 export 'src/transport/sse_compressed_transport.dart';
 export 'src/transport/sse_heartbeat_transport.dart';
 export 'src/protocol/protocol.dart';
-export 'src/protocol/batch.dart';
 export 'src/auth/oauth.dart';
 export 'src/auth/oauth_client.dart';
 export 'src/common/result.dart';

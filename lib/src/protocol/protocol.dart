@@ -66,12 +66,8 @@ class McpProtocol {
   static const String methodGetPrompt = "prompts/get";
   static const String methodComplete = "completion/complete";
   static const String methodListRoots = "roots/list";
-  static const String methodAddRoot = "roots/add";
-  static const String methodRemoveRoot = "roots/remove";
 
   /// 2025-03-26 New methods
-  static const String methodBatch = "batch";
-  static const String methodHealthCheck = "health/check";
   static const String methodCapabilitiesUpdate = "capabilities/update";
 
   /// Notifications
