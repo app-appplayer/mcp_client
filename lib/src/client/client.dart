@@ -47,6 +47,18 @@ class Client {
   /// Map of notification handlers by method
   final _notificationHandlers = <String, Function(Map<String, dynamic>)>{};
 
+  /// Map of incoming-request handlers by method (server-initiated requests
+  /// per spec: `sampling/createMessage`, `roots/list`, `elicitation/create`).
+  /// Each handler returns the JSON-RPC `result` map.
+  final _requestHandlers =
+      <String, Future<Map<String, dynamic>> Function(Map<String, dynamic>)>{};
+
+  /// Local roots advertised by this client. The server can fetch the
+  /// list via the `roots/list` request — handled by the built-in
+  /// incoming-request handler. Mutations push
+  /// `notifications/roots/list_changed` to the server.
+  final List<Root> _roots = <Root>[];
+
   /// Server capabilities received during initialization
   ServerCapabilities? _serverCapabilities;
 
@@ -83,7 +95,13 @@ class Client {
     required this.name,
     required this.version,
     this.capabilities = const ClientCapabilities(),
-  });
+  }) {
+    // Default `roots/list` handler returns the locally registered roots.
+    // Hosts may override with [onListRoots] for dynamic roots.
+    _requestHandlers['roots/list'] = (_) async => {
+          'roots': _roots.map((r) => r.toJson()).toList(),
+        };
+  }
 
   /// Connect the client to a transport
   Future<void> connect(ClientTransport transport) async {
@@ -383,17 +401,39 @@ class Client {
     return ToolCallTracking(operationId: operationId, result: result);
   }
 
-  /// Cancel an operation that is in progress on the server
+  /// Cancel an in-flight server-side operation.
   ///
-  /// [operationId] - The ID of the operation to cancel
-  ///
-  /// Returns a Future that completes when the cancellation request is processed
-  Future<void> cancelOperation(String operationId) async {
+  /// Per spec, cancellation is a NOTIFICATION (`notifications/cancelled`),
+  /// not a request — fire-and-forget with `requestId` and an optional
+  /// `reason`.
+  void notifyCancelled(String requestId, {String? reason}) {
     if (!_initialized) {
       throw McpError('Client is not initialized');
     }
+    _sendNotification('notifications/cancelled', {
+      'requestId': requestId,
+      if (reason != null) 'reason': reason,
+    });
+  }
 
-    await _sendRequest('cancel', {'id': operationId});
+  /// Report progress on an in-flight server-initiated request (spec
+  /// `notifications/progress`). [progressToken] is the token the server
+  /// sent in the original request's `_meta.progressToken`.
+  void notifyProgress(
+    dynamic progressToken,
+    double progress, {
+    double? total,
+    String? message,
+  }) {
+    if (!_initialized) {
+      throw McpError('Client is not initialized');
+    }
+    _sendNotification('notifications/progress', {
+      'progressToken': progressToken,
+      'progress': progress,
+      if (total != null) 'total': total,
+      if (message != null) 'message': message,
+    });
   }
 
   /// List available resources on the server
@@ -540,92 +580,78 @@ class Client {
     return GetPromptResult.fromJson(response);
   }
 
-  /// Request model sampling from the server
-  Future<CreateMessageResult> createMessage(
-    CreateMessageRequest request,
-  ) async {
-    if (!_initialized) {
-      throw McpError('Client is not initialized');
-    }
-
-    if (_serverCapabilities?.sampling != true) {
-      throw McpError('Server does not support sampling');
-    }
-
-    final response = await _sendRequest(
-      McpProtocol.methodComplete,
-      request.toJson(),
-    );
-    return CreateMessageResult.fromJson(response);
-  }
-
-  /// Request the current health status of the server
+  /// Register a handler for server-initiated `sampling/createMessage`
+  /// requests. The driver app (Claude Desktop / Claude Code / a vibe-style
+  /// IDE) fulfils the prompt with its own LLM and returns the spec
+  /// `CreateMessageResult` (`role`, `content`, `model`, optional
+  /// `stopReason`).
   ///
-  /// Returns a Map containing server health metrics including:
-  /// - is_running: Whether the server is running
-  /// - connected_sessions: Number of connected sessions
-  /// - registered_tools: Number of registered tools
-  /// - registered_resources: Number of registered resources
-  /// - registered_prompts: Number of registered prompts
-  /// - start_time: When the server started
-  /// - uptime_seconds: How long the server has been running
-  /// - metrics: Detailed performance metrics
-  Future<ServerHealth> healthCheck() async {
-    if (!_initialized) {
-      throw McpError('Client is not initialized');
-    }
-
-    final response = await _sendRequest('health/check', {});
-    return ServerHealth.fromJson(response);
+  /// Calling this advertises the `sampling` client capability during the
+  /// next initialize handshake.
+  void onSamplingRequest(
+    Future<CreateMessageResult> Function(CreateMessageRequest request) handler,
+  ) {
+    _requestHandlers['sampling/createMessage'] = (params) async {
+      final req = CreateMessageRequest.fromJson(params);
+      final result = await handler(req);
+      return result.toJson();
+    };
   }
 
-  /// Add a root
-  Future<void> addRoot(Root root) async {
-    if (!_initialized) {
-      throw McpError('Client is not initialized');
+  /// Register a handler for server-initiated `elicitation/create`
+  /// requests (spec 2025-06-18). The handler shows the requested form to
+  /// the user and returns `{ action, content? }` per spec — `action` is
+  /// `accept` / `decline` / `cancel`.
+  ///
+  /// Calling this advertises the `elicitation` client capability.
+  void onElicitationRequest(
+    Future<Map<String, dynamic>> Function(Map<String, dynamic> params) handler,
+  ) {
+    _requestHandlers['elicitation/create'] = handler;
+  }
+
+  /// Register a custom handler for server-initiated `roots/list` requests.
+  /// By default the client responds with the locally configured [roots]
+  /// list — supply this to override.
+  void onListRoots(
+    Future<List<Root>> Function() handler,
+  ) {
+    _requestHandlers['roots/list'] = (params) async {
+      final list = await handler();
+      return {
+        'roots': list.map((r) => r.toJson()).toList(),
+      };
+    };
+  }
+
+  /// Locally configured roots (URI / filesystem boundaries the server is
+  /// allowed to operate in). Mutations push
+  /// `notifications/roots/list_changed` to the server.
+  List<Root> get roots => List.unmodifiable(_roots);
+
+  /// Add a root to the client's local list. Server is notified via
+  /// `notifications/roots/list_changed`.
+  void addRoot(Root root) {
+    if (_roots.any((r) => r.uri == root.uri)) {
+      throw McpError('Root with URI "${root.uri}" already exists');
     }
-
-    if (!capabilities.roots) {
-      throw McpError('Client does not support roots');
-    }
-
-    await _sendRequest('roots/add', {'root': root.toJson()});
-
-    if (capabilities.rootsListChanged) {
+    _roots.add(root);
+    if (isConnected) {
       _sendNotification('notifications/roots/list_changed', {});
     }
   }
 
-  /// Remove a root
-  Future<void> removeRoot(String uri) async {
-    if (!_initialized) {
-      throw McpError('Client is not initialized');
+  /// Remove a root from the client's local list. Server is notified via
+  /// `notifications/roots/list_changed`.
+  void removeRoot(String uri) {
+    final removed = _roots.length;
+    _roots.removeWhere((r) => r.uri == uri);
+    if (_roots.length == removed) {
+      throw McpError('Root with URI "$uri" does not exist');
     }
-
-    if (!capabilities.roots) {
-      throw McpError('Client does not support roots');
-    }
-
-    await _sendRequest('roots/remove', {'uri': uri});
-
-    if (capabilities.rootsListChanged) {
+    if (isConnected) {
       _sendNotification('notifications/roots/list_changed', {});
     }
-  }
-
-  /// List roots
-  Future<List<Root>> listRoots() async {
-    if (!_initialized) {
-      throw McpError('Client is not initialized');
-    }
-
-    if (!capabilities.roots) {
-      throw McpError('Client does not support roots');
-    }
-
-    final response = await _sendRequest('roots/list', {});
-    final rootsList = response['roots'] as List<dynamic>;
-    return rootsList.map((root) => Root.fromJson(root)).toList();
   }
 
   /// Set the logging level for the server
@@ -634,7 +660,8 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    await _sendRequest('logging/set_level', {'level': level.name});
+    // Spec method name is camelCase: `logging/setLevel`.
+    await _sendRequest('logging/setLevel', {'level': level.name});
   }
 
   /// Register a notification handler
@@ -704,22 +731,10 @@ class Client {
     });
   }
 
-  /// Register a handler for sampling response notifications
-  ///
-  /// The handler will be called with:
-  /// [requestId] - The ID of the sampling request
-  /// [result] - The sampling result from the LLM
-  void onSamplingResponse(
-    Function(String requestId, CreateMessageResult result) handler,
-  ) {
-    onNotification('sampling/response', (params) {
-      final requestId =
-          params['requestId'] as String? ?? params['request_id'] as String;
-      final resultData = params['result'] as Map<String, dynamic>;
-      final result = CreateMessageResult.fromJson(resultData);
-      handler(requestId, result);
-    });
-  }
+  // `onSamplingResponse` (non-spec `sampling/response` notification) was
+  // removed in 2.0. Sampling now follows the spec request/response shape:
+  // server sends `sampling/createMessage` request → client's
+  // [onSamplingRequest] handler returns the result.
 
   /// Handle logging notification
   void onLogging(
@@ -820,9 +835,71 @@ class Client {
       _handleResponse(message);
     } else if (message.isNotification) {
       _handleNotification(message);
+    } else if (message.isRequest) {
+      // Server-initiated request — sampling / elicitation / roots / etc.
+      await _handleIncomingRequest(message);
     } else {
       _logger.debug('Ignoring unexpected message type: ${message.toJson()}');
     }
+  }
+
+  /// Dispatch an incoming server-initiated request to a registered handler
+  /// and send the JSON-RPC response back. Spec methods routed here:
+  ///   - `sampling/createMessage` (driver app's LLM)
+  ///   - `roots/list` (client's filesystem / URI roots)
+  ///   - `elicitation/create` (user input prompt)
+  Future<void> _handleIncomingRequest(JsonRpcMessage request) async {
+    final method = request.method;
+    final id = request.id;
+    if (method == null || id == null) {
+      return;
+    }
+    final handler = _requestHandlers[method];
+    if (handler == null) {
+      _sendErrorResult(
+        id,
+        code: McpProtocol.errorMethodNotFound,
+        message: 'Method not found: $method',
+      );
+      return;
+    }
+    try {
+      final result = await handler(request.params ?? const {});
+      _sendResultResponse(id, result);
+    } catch (e) {
+      _sendErrorResult(
+        id,
+        code: -32603, // internal error
+        message: 'Handler error: $e',
+      );
+    }
+  }
+
+  /// Send a JSON-RPC `result` response to the server.
+  void _sendResultResponse(dynamic id, Map<String, dynamic> result) {
+    final transport = _transport;
+    if (transport == null) return;
+    transport.send({
+      'jsonrpc': '2.0',
+      'id': id,
+      'result': result,
+    });
+  }
+
+  /// Send a JSON-RPC `error` response to the server.
+  void _sendErrorResult(dynamic id,
+      {required int code, required String message, dynamic data}) {
+    final transport = _transport;
+    if (transport == null) return;
+    transport.send({
+      'jsonrpc': '2.0',
+      'id': id,
+      'error': {
+        'code': code,
+        'message': message,
+        if (data != null) 'data': data,
+      },
+    });
   }
 
   /// Handle a JSON-RPC response

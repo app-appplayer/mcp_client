@@ -522,38 +522,10 @@ void main() {
       });
     });
 
-    group('Health Check Tests', () {
-      test('Client can perform health check', () async {
-        mockTransport.queueResponse({
-          'jsonrpc': '2.0',
-          'id': 1,
-          'result': {
-            'protocolVersion': '2025-03-26',
-            'serverInfo': {'name': 'Mock Server', 'version': '1.0.0'},
-            'capabilities': {},
-          },
-        });
-
-        mockTransport.queueResponse({
-          'jsonrpc': '2.0',
-          'id': 2,
-          'result': {
-            'status': 'healthy',
-            'version': '1.0.0',
-            'uptimeSeconds': 3600,
-            'connections': 5,
-          },
-        });
-
-        await client.connect(mockTransport);
-        final health = await client.healthCheck();
-
-        expect(health.status, equals('healthy'));
-        expect(health.version, equals('1.0.0'));
-        expect(health.uptime, equals(Duration(seconds: 3600)));
-        expect(health.connections, equals(5));
-      });
-    });
+    // The non-spec `health/check` JSON-RPC method was removed in 2.0.
+    // Servers now expose health on a transport-specific path (e.g. an
+    // HTTP `/health` endpoint) — testing that is out of scope for the
+    // protocol client.
 
     group('Logging Integration Tests', () {
       test('Set logging level', () async {
@@ -573,7 +545,8 @@ void main() {
         await client.setLoggingLevel(McpLogLevel.debug);
 
         final setLevelMessage = mockTransport.sentMessages[2];
-        expect(setLevelMessage['method'], equals('logging/set_level'));
+        // Spec method name is camelCase per MCP standard.
+        expect(setLevelMessage['method'], equals('logging/setLevel'));
         expect(setLevelMessage['params']!['level'], equals('debug'));
       });
     });

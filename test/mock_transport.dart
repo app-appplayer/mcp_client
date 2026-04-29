@@ -26,6 +26,15 @@ class MockTransport implements ClientTransport {
     }
   }
 
+  /// Simulate a server-initiated message arriving at the client. Use for
+  /// inbound `sampling/createMessage`, `roots/list`, `elicitation/create`
+  /// requests and any spec notification the test wants to inject.
+  void simulateMessage(Map<String, dynamic> message) {
+    if (!_closed) {
+      _messageController.add(message);
+    }
+  }
+
   @override
   Stream<dynamic> get onMessage => _messageController.stream;
 
