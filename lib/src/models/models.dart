@@ -365,15 +365,24 @@ class CallToolResult {
 class Resource {
   final String uri;
   final String name;
+  /// Spec 2025-06-18+: human-readable display name. Falls back to [name].
+  final String? title;
   final String description;
   final String? mimeType;
+  /// Spec 2025-11-25+: visual metadata (icon objects).
+  final List<Map<String, dynamic>>? icons;
+  /// Spec 2025-06-18+: free-form `_meta` map.
+  final Map<String, dynamic>? meta;
   final Map<String, dynamic>? metadata;
 
   const Resource({
     required this.uri,
     required this.name,
+    this.title,
     required this.description,
     this.mimeType,
+    this.icons,
+    this.meta,
     this.metadata,
   });
 
@@ -383,7 +392,10 @@ class Resource {
       'name': name,
       'description': description,
     };
+    if (title != null) json['title'] = title;
     if (mimeType != null) json['mimeType'] = mimeType;
+    if (icons != null) json['icons'] = icons;
+    if (meta != null) json['_meta'] = meta;
     if (metadata != null) json['metadata'] = metadata!;
     return json;
   }
@@ -392,8 +404,13 @@ class Resource {
     return Resource(
       uri: json['uri'] as String,
       name: json['name'] as String,
+      title: json['title'] as String?,
       description: json['description'] as String,
       mimeType: json['mimeType'] as String?,
+      icons: (json['icons'] as List?)
+          ?.map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(),
+      meta: json['_meta'] as Map<String, dynamic>?,
       metadata: json['metadata'] as Map<String, dynamic>?,
     );
   }
@@ -534,14 +551,23 @@ class PromptArgument {
 @immutable
 class Prompt {
   final String name;
+  /// Spec 2025-06-18+: human-readable display name.
+  final String? title;
   final String? description;
   final List<PromptArgument> arguments;
+  /// Spec 2025-11-25+: visual metadata.
+  final List<Map<String, dynamic>>? icons;
+  /// Spec 2025-06-18+: `_meta` map.
+  final Map<String, dynamic>? meta;
   final Map<String, dynamic>? metadata;
 
   const Prompt({
     required this.name,
+    this.title,
     this.description,
     required this.arguments,
+    this.icons,
+    this.meta,
     this.metadata,
   });
 
@@ -550,7 +576,10 @@ class Prompt {
       'name': name,
       'arguments': arguments.map((arg) => arg.toJson()).toList(),
     };
+    if (title != null) json['title'] = title!;
     if (description != null) json['description'] = description!;
+    if (icons != null) json['icons'] = icons!;
+    if (meta != null) json['_meta'] = meta!;
     if (metadata != null) json['metadata'] = metadata!;
     return json;
   }
@@ -564,8 +593,13 @@ class Prompt {
 
     return Prompt(
       name: json['name'] as String,
+      title: json['title'] as String?,
       description: json['description'] as String?,
       arguments: arguments,
+      icons: (json['icons'] as List?)
+          ?.map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(),
+      meta: json['_meta'] as Map<String, dynamic>?,
       metadata: json['metadata'] as Map<String, dynamic>?,
     );
   }
