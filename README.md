@@ -4,49 +4,39 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
 
 ## Features
 
-- **MCP Protocol 2025-03-26** - Latest protocol specification support
-- **Unified Transport Configuration** - Simplified transport setup with sealed classes
-- **Enhanced Error Handling** - Result types for robust error management
-- **OAuth 2.1 Authentication** - Built-in OAuth support for secure connections
-- **Multiple Transport Types**:
-  - **STDIO** - Local process communication (native platforms only)
-  - **SSE** - Server-Sent Events with authentication, compression, and heartbeat (web and native)
-  - **HTTP** - Streamable HTTP/2 transport with full feature support (web and native)
-- **Core MCP Primitives**:
-  - **Resources** - Access server data with templates and subscriptions
-  - **Tools** - Execute server functionality with progress tracking
-  - **Prompts** - Reusable interaction templates
-  - **Roots** - Filesystem boundary management
-  - **Sampling** - LLM text generation requests
-- **Advanced Features**:
-  - **Deferred Tool Loading** - Token-efficient tool metadata for LLM context (60-80% reduction)
-  - **Progress Tracking** - Monitor long-running operations
-  - **Operation Cancellation** - Cancel ongoing tasks
-  - **Batch Processing** - JSON-RPC batch requests
-  - **Connection Monitoring** - Health checks and connection state events
-  - **Resource Subscriptions** - Real-time resource update notifications
-  - **Session Management** - Automatic session validation and reconnection support
-  - **State Persistence** - Smart localStorage management with server restart detection
-- **Cross-platform support**: Android, iOS, web, Linux, Windows, macOS
-  - **Web Platform**: SSE and StreamableHTTP transports fully supported; STDIO is native-only
+- **Multi-revision MCP support** with per-version capability negotiation — see _Protocol Versions_ below
+- **Unified transport configuration** — sealed `TransportConfig` for stdio / SSE / Streamable HTTP
+- **OAuth 2.1** — built-in authorization for secure HTTP transports
+- **Result-typed error handling** — `Result<Client, Error>` from `createAndConnect`, plus `McpError` for spec error codes
+- **Core MCP primitives**:
+  - **Resources** — server data, URI templates, subscriptions
+  - **Tools** — server-side functions, progress tracking, structured output (2025-06-18+)
+  - **Prompts** — reusable interaction templates with completion (2025-06-18+)
+  - **Roots** — filesystem boundary configuration; the server requests them via `roots/list`
+  - **Sampling** — register a host LLM completion handler so the server can drive `sampling/createMessage`
+  - **Elicitation** (2025-06-18) — register a user-input handler so the server can collect structured prompts
+- **Advanced**:
+  - **Deferred Tool Loading** — lightweight metadata + on-demand schema fetch (60–80% token reduction)
+  - **Progress notifications** — outbound `notifications/progress` and inbound listener
+  - **Cancellation** — `notifyCancelled(requestId, reason)` per spec notification
+  - **Resource subscriptions** — `notifications/resources/updated`
+  - **Session management** — automatic session validation and reconnection support
+- **Cross-platform**: Android, iOS, web, Linux, Windows, macOS (web supports SSE + Streamable HTTP; stdio is native-only)
 
-## Protocol Version
+## Protocol Versions
 
-This package implements the Model Context Protocol (MCP) specification version `2025-03-26`.
+Implements the Model Context Protocol specification across **four** revisions, with the negotiated version determining which features are advertised and which dispatch paths are taken.
 
-The protocol version is crucial for ensuring compatibility between MCP clients and servers. Each release of this package may support different protocol versions, so it's important to:
+| Version | Notes |
+|---|---|
+| `2024-11-05` | Original; JSON-RPC batching available |
+| `2025-03-26` | Earlier 2025 revision; JSON-RPC batching available |
+| `2025-06-18` | Adds elicitation, structured tool output, resource links, OAuth Resource Server, MCP-Protocol-Version header. Removes JSON-RPC batching |
+| `2025-11-25` | Adds icons, sampling tool calling (`tools` / `toolChoice`), URL-mode elicitation, OIDC Discovery, Client ID Metadata Documents |
 
-- Check the CHANGELOG.md for protocol version updates
-- Ensure client and server protocol versions are compatible
-- Stay updated with the latest MCP specification
+Runtime gates: `McpProtocol.supportsBatching(v)` / `supportsElicitation(v)` / `supportsStructuredToolOutput(v)` / `supportsIconsAndSamplingTools(v)` / `requiresProtocolHeader(v)`.
 
-### Version Compatibility
-
-- Primary protocol version: 2025-03-26
-- Backward compatibility: 2024-11-05
-- Compatibility: Tested with latest MCP server implementations
-
-For the most up-to-date information on protocol versions and compatibility, refer to the [Model Context Protocol specification](https://spec.modelcontextprotocol.io).
+For details, see the [Model Context Protocol specification](https://spec.modelcontextprotocol.io).
 
 ## Getting Started
 
@@ -215,7 +205,7 @@ final trackingResult = await client.callToolWithTracking('long-running-operation
 });
 final operationId = trackingResult.operationId;
 
-// Register progress handler
+// Listen to inbound progress notifications from the server
 client.onProgress((requestId, progress, message) {
   _logger.debug('Operation $requestId: $progress% - $message');
 });
@@ -226,8 +216,8 @@ if (content is TextContent) {
   _logger.debug('Search results: ${content.text}');
 }
 
-// Cancel an operation if needed
-await client.cancelOperation(operationId);
+// Cancel an in-flight request — emits the spec `notifications/cancelled`
+client.notifyCancelled(operationId, reason: 'user requested');
 ```
 
 ### Prompts
@@ -256,83 +246,51 @@ for (final message in promptResult.messages) {
 
 ### Roots
 
-Roots allow you to manage filesystem boundaries:
+Roots scope the filesystem the server is allowed to operate on. Per spec, the server requests them from the client via `roots/list` — register them locally:
 
 ```dart
-// Add a root
-await client.addRoot(Root(
+// Configure local roots — these are what the client returns when the server asks
+client.addRoot(Root(
   uri: 'file:///path/to/allowed/directory',
   name: 'Project Files',
   description: 'Files for the current project',
 ));
 
-// List roots
-final roots = await client.listRoots();
-_logger.debug('Configured roots: ${roots.map((r) => r.name).join(', ')}');
+// Inspect the locally-configured roots
+_logger.debug('Configured roots: ${client.roots.map((r) => r.name).join(', ')}');
 
 // Remove a root
-await client.removeRoot('file:///path/to/allowed/directory');
+client.removeRoot('file:///path/to/allowed/directory');
 
-// Register for roots list changes
-client.onRootsListChanged(() {
-  _logger.debug('Roots list has changed');
-  client.listRoots().then((roots) {
-    _logger.debug('New roots: ${roots.map((r) => r.name).join(', ')}');
-  });
-});
+// Override the default `roots/list` response handler if you need custom behavior
+client.onListRoots((req) async => ListRootsResult(roots: client.roots));
 ```
 
 ### Sampling
 
-Sampling allows you to request LLM text generation through the MCP protocol:
+Sampling is **server-initiated** per the MCP spec. Register a handler that fulfils completion requests using your host LLM:
 
 ```dart
-// Create a sampling request
-final request = CreateMessageRequest(
-  messages: [
-    Message(
-      role: 'user',
-      content: TextContent(text: 'What is the Model Context Protocol?'),
-    ),
-  ],
-  modelPreferences: ModelPreferences(
-    hints: [
-      ModelHint(name: 'claude-3-sonnet'),
-      ModelHint(name: 'claude-3-opus'),
-    ],
-    intelligencePriority: 0.8,
-    speedPriority: 0.4,
-  ),
-  maxTokens: 1000,
-  temperature: 0.7,
-);
-
-// Request sampling
-final result = await client.createMessage(request);
-
-// Process the result
-_logger.debug('Model used: ${result.model}');
-_logger.debug('Response: ${(result.content as TextContent).text}');
-
-// Register for sampling responses
-client.onSamplingResponse((requestId, result) {
-  _logger.debug('Sampling response for request $requestId:');
-  _logger.debug('Model: ${result.model}');
-  _logger.debug('Content: ${(result.content as TextContent).text}');
+client.onSamplingRequest((request) async {
+  // Forward to your LLM (e.g., via mcp_llm), then return the spec response shape.
+  final reply = await myLlm.complete(request.messages);
+  return CreateMessageResult(
+    model: reply.model,
+    role: 'assistant',
+    content: TextContent(text: reply.text),
+  );
 });
 ```
 
-### Server Health
+### Elicitation (2025-06-18)
 
-Monitor the health status of connected MCP servers:
+The server can request structured input from the user via `elicitation/create`. Register a handler:
 
 ```dart
-// Get server health status
-final health = await client.healthCheck();
-_logger.debug('Server running: ${health.isRunning}');
-_logger.debug('Connected sessions: ${health.connectedSessions}');
-_logger.debug('Registered tools: ${health.registeredTools}');
-_logger.debug('Uptime: ${health.uptime.inMinutes} minutes');
+client.onElicitationRequest((request) async {
+  final answers = await ui.promptUser(request.message, schema: request.requestedSchema);
+  return ElicitResult(action: 'accept', content: answers);
+});
 ```
 
 ## Transport Layers

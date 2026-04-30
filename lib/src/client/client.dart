@@ -619,6 +619,21 @@ class Client {
     };
   }
 
+  /// Map-based variant of [onSamplingRequest]. Receives the spec
+  /// `CreateMessageRequest.params` as a raw map and must return the
+  /// raw `CreateMessageResult` map.
+  ///
+  /// Exists so generic adapters (notably `mcp_llm`'s `LlmClientAdapter`)
+  /// can register a handler without importing the typed
+  /// [CreateMessageRequest] / [CreateMessageResult] models — the typed
+  /// entry point's signature would otherwise fail the runtime function
+  /// subtype check at dynamic dispatch time.
+  void onSamplingRequestMap(
+    Future<Map<String, dynamic>> Function(Map<String, dynamic> params) handler,
+  ) {
+    _requestHandlers['sampling/createMessage'] = handler;
+  }
+
   /// Register a handler for server-initiated `elicitation/create`
   /// requests (spec 2025-06-18). The handler shows the requested form to
   /// the user and returns `{ action, content? }` per spec — `action` is
@@ -645,6 +660,19 @@ class Client {
     };
   }
 
+  /// Map-based variant of [onListRoots]. The handler returns the raw
+  /// list of root maps (each with at least a `uri` key); this method
+  /// wraps it in the spec response shape. Sibling to
+  /// [onSamplingRequestMap] — same rationale.
+  void onListRootsMap(
+    Future<List<Map<String, dynamic>>> Function() handler,
+  ) {
+    _requestHandlers['roots/list'] = (params) async {
+      final list = await handler();
+      return {'roots': list};
+    };
+  }
+
   /// Locally configured roots (URI / filesystem boundaries the server is
   /// allowed to operate in). Mutations push
   /// `notifications/roots/list_changed` to the server.
@@ -660,6 +688,13 @@ class Client {
     if (isConnected) {
       _sendNotification('notifications/roots/list_changed', {});
     }
+  }
+
+  /// Map-based variant of [addRoot] for callers that don't have the
+  /// typed [Root] available. Constructs a [Root] from the supplied map
+  /// (must contain at least `uri`) and delegates to [addRoot].
+  void addRootMap(Map<String, dynamic> root) {
+    addRoot(Root.fromJson(root));
   }
 
   /// Remove a root from the client's local list. Server is notified via
