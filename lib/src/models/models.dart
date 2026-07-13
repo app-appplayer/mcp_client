@@ -304,7 +304,12 @@ class Tool {
     return Tool(
       name: json['name'] as String,
       title: json['title'] as String?,
-      description: json['description'] as String,
+      // `description` is OPTIONAL per the MCP spec (schema.ts
+      // `description?: string`) — a spec-conforming server may omit it. A
+      // non-null cast here made `tools/list` parsing throw `type 'Null' is
+      // not a subtype of type 'String'` against such servers; tolerate
+      // absence with an empty string (the field stays non-null).
+      description: json['description'] as String? ?? '',
       inputSchema: json['inputSchema'] as Map<String, dynamic>,
       outputSchema: json['outputSchema'] as Map<String, dynamic>?,
       icons: (json['icons'] as List?)
@@ -405,7 +410,8 @@ class Resource {
       uri: json['uri'] as String,
       name: json['name'] as String,
       title: json['title'] as String?,
-      description: json['description'] as String,
+      // OPTIONAL per the MCP spec — see Tool.fromJson.
+      description: json['description'] as String? ?? '',
       mimeType: json['mimeType'] as String?,
       icons: (json['icons'] as List?)
           ?.map((e) => Map<String, dynamic>.from(e as Map))
@@ -447,7 +453,8 @@ class ResourceTemplate {
     return ResourceTemplate(
       uriTemplate: json['uriTemplate'] as String,
       name: json['name'] as String,
-      description: json['description'] as String,
+      // OPTIONAL per the MCP spec — see Tool.fromJson.
+      description: json['description'] as String? ?? '',
       mimeType: json['mimeType'] as String?,
     );
   }

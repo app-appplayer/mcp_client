@@ -1,3 +1,10 @@
+## [2.0.1] - 2026-07-13 - Spec-optional description parsing
+
+### Fixed
+- `Tool` / `Resource` / `ResourceTemplate` `.fromJson` no longer require
+  `description` (optional per the MCP spec; missing → `''`). A server omitting
+  it made `tools/list` / `resources/list` parsing throw a `Null` cast.
+
 ## [2.0.0] - 2026-04-30 - MCP spec compliance + 2025-11-25 alignment
 
 Big-Bang spec normalization. Supports protocol revisions 2024-11-05, 2025-03-26, 2025-06-18, and 2025-11-25 with per-version capability gating. Pairs with mcp_server 2.0.
