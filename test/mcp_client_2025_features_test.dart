@@ -251,6 +251,29 @@ void main() {
         expect(templates[1].uriTemplate, equals('api://v1/{endpoint}/{id}'));
       });
 
+      test('ResourceTemplate icons round-trip (2025-11-25)', () {
+        // Regression: the client used to drop `icons` on resource templates.
+        const json = {
+          'uriTemplate': 'ui://widget/{id}',
+          'name': 'Widget',
+          'description': 'A widget template',
+          'mimeType': 'text/html',
+          'icons': [
+            {'src': 'https://example.com/icon.png', 'sizes': '48x48'},
+          ],
+        };
+
+        final template = ResourceTemplate.fromJson(json);
+        expect(template.icons, isNotNull);
+        expect(template.icons!.single['src'],
+            equals('https://example.com/icon.png'));
+
+        final roundTripped = template.toJson();
+        expect(roundTripped['icons'], isNotNull);
+        expect((roundTripped['icons'] as List).single,
+            equals({'src': 'https://example.com/icon.png', 'sizes': '48x48'}));
+      });
+
       test('Access resource using template', () async {
         mockTransport.queueResponse({
           'jsonrpc': '2.0',

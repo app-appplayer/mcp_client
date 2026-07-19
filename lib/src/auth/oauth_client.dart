@@ -8,6 +8,31 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import 'oauth.dart';
+import 'oauth_discovery.dart';
+
+/// Result of resolving a `401` challenge into concrete OAuth endpoints
+/// (RFC 9728 PRM + RFC 8414/OIDC authorization-server discovery).
+class OAuthDiscoveryResult {
+  /// The parsed `WWW-Authenticate` challenge, when one was present.
+  final WwwAuthenticateChallenge? challenge;
+
+  /// The fetched Protected Resource Metadata (RFC 9728).
+  final ProtectedResourceMetadata protectedResource;
+
+  /// The discovered authorization-server metadata (RFC 8414 / OIDC).
+  final AuthServerMetadata authServerMetadata;
+
+  /// The scope to request when (re-)authorizing (SEP-835 step-up): the
+  /// challenge `scope=` when advertised, else the PRM `scopes_supported`.
+  final List<String> stepUpScopes;
+
+  const OAuthDiscoveryResult({
+    required this.challenge,
+    required this.protectedResource,
+    required this.authServerMetadata,
+    required this.stepUpScopes,
+  });
+}
 
 /// HTTP-based OAuth 2.1 client implementation
 class HttpOAuthClient implements OAuthClient {
@@ -49,6 +74,154 @@ class HttpOAuthClient implements OAuthClient {
     return _metadata!;
   }
 
+  /// The `client_id` value presented on authorization/token requests.
+  ///
+  /// SEP-991 (CIMD): when [OAuthConfig.clientIdMetadataUrl] is set, the client
+  /// identifies itself with that `https` URL instead of a pre-registered id.
+  /// Falls back to [OAuthConfig.clientId] otherwise. Additive — behavior is
+  /// unchanged when the metadata URL is null.
+  String get effectiveClientId =>
+      config.clientIdMetadataUrl ?? config.clientId;
+
+  /// Parse a raw `WWW-Authenticate` header (RFC 9728 / SEP-985 / SEP-835).
+  /// Convenience passthrough to [WwwAuthenticateChallenge.parse].
+  WwwAuthenticateChallenge? parseWwwAuthenticate(String? header) =>
+      WwwAuthenticateChallenge.parse(header);
+
+  /// Derive the RFC 9728 well-known PRM URL for a resource origin, used as the
+  /// fallback when a `401` carries no `resource_metadata=` param (SEP-985).
+  ///
+  /// `https://api.example.com/mcp` → `https://api.example.com/.well-known/
+  /// oauth-protected-resource`. The well-known segment is inserted at the
+  /// origin per RFC 9728 §3.1.
+  Uri wellKnownProtectedResourceUrl(String resourceUrl) {
+    final uri = Uri.parse(resourceUrl);
+    return Uri.parse(
+        '${uri.origin}/.well-known/oauth-protected-resource');
+  }
+
+  /// Fetch and parse an RFC 9728 Protected Resource Metadata document.
+  Future<ProtectedResourceMetadata> fetchProtectedResourceMetadata(
+      Uri url) async {
+    final response = await _httpClient.get(
+      url,
+      headers: {'Accept': 'application/json'},
+    );
+    if (response.statusCode != 200) {
+      throw OAuthError(
+        error: 'protected_resource_discovery_failed',
+        errorDescription:
+            'Failed to fetch Protected Resource Metadata ($url): '
+            '${response.statusCode}',
+      );
+    }
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    return ProtectedResourceMetadata.fromJson(json);
+  }
+
+  /// Discover authorization-server metadata for an issuer/AS identifier,
+  /// trying BOTH RFC 8414 (`/.well-known/oauth-authorization-server`) and
+  /// OpenID Connect Discovery 1.0 (`/.well-known/openid-configuration`,
+  /// PR#797). The OIDC document shares the RFC 8414 field shape, so
+  /// [AuthServerMetadata.fromJson] parses either. The first endpoint that
+  /// returns a valid document wins.
+  ///
+  /// Sets the client's cached metadata so the existing PKCE/token flow
+  /// ([getAuthorizationUrl], [exchangeCodeForToken], …) targets the discovered
+  /// endpoints. No cryptography is performed here — these are metadata fetches.
+  Future<AuthServerMetadata> discoverAuthorizationServer(
+      String authorizationServer) async {
+    final origin = Uri.parse(authorizationServer).origin;
+    final candidates = <Uri>[
+      Uri.parse('$origin/.well-known/oauth-authorization-server'),
+      Uri.parse('$origin/.well-known/openid-configuration'),
+    ];
+
+    OAuthError? lastError;
+    for (final url in candidates) {
+      try {
+        final response = await _httpClient.get(
+          url,
+          headers: {'Accept': 'application/json'},
+        );
+        if (response.statusCode != 200) {
+          lastError = OAuthError(
+            error: 'as_discovery_failed',
+            errorDescription: 'AS metadata ($url): ${response.statusCode}',
+          );
+          continue;
+        }
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final metadata = AuthServerMetadata.fromJson(json);
+        _metadata = metadata;
+        return metadata;
+      } catch (e) {
+        lastError = e is OAuthError
+            ? e
+            : OAuthError(
+                error: 'as_discovery_failed',
+                errorDescription: 'AS metadata ($url): $e',
+              );
+      }
+    }
+    throw lastError ??
+        OAuthError(
+          error: 'as_discovery_failed',
+          errorDescription:
+              'No authorization-server metadata found for '
+              '$authorizationServer',
+        );
+  }
+
+  /// Resolve a `401` into concrete OAuth endpoints (RFC 9728 + RFC 8414/OIDC).
+  ///
+  /// Orchestrates the MCP 2025-11-25 discovery chain:
+  /// 1. Parse the `WWW-Authenticate` challenge (SEP-985); read
+  ///    `resource_metadata=` when present, else fall back to the resource
+  ///    origin's `.well-known/oauth-protected-resource` (SEP-985 fallback).
+  /// 2. Fetch the PRM document and read `authorization_servers` (RFC 9728).
+  /// 3. Discover the AS via RFC 8414 + OIDC (PR#797).
+  /// 4. Compute step-up scopes from the challenge `scope=` (SEP-835), falling
+  ///    back to the PRM `scopes_supported`.
+  ///
+  /// On success the client's cached AS metadata is set so the existing
+  /// PKCE/token flow targets the discovered endpoints — reusing all existing
+  /// crypto. Returns the resolved [OAuthDiscoveryResult].
+  Future<OAuthDiscoveryResult> discoverFrom401({
+    required String resourceUrl,
+    String? wwwAuthenticate,
+  }) async {
+    final challenge = WwwAuthenticateChallenge.parse(wwwAuthenticate);
+
+    final prmUrl = challenge?.resourceMetadata != null
+        ? Uri.parse(challenge!.resourceMetadata!)
+        : wellKnownProtectedResourceUrl(resourceUrl);
+
+    final prm = await fetchProtectedResourceMetadata(prmUrl);
+    final authServer = prm.primaryAuthorizationServer;
+    if (authServer == null) {
+      throw OAuthError(
+        error: 'no_authorization_server',
+        errorDescription:
+            'Protected Resource Metadata lists no authorization_servers',
+      );
+    }
+
+    final asMetadata = await discoverAuthorizationServer(authServer);
+
+    final challengeScopes = challenge?.scopes ?? const <String>[];
+    final stepUpScopes = challengeScopes.isNotEmpty
+        ? challengeScopes
+        : (prm.scopesSupported ?? const <String>[]);
+
+    return OAuthDiscoveryResult(
+      challenge: challenge,
+      protectedResource: prm,
+      authServerMetadata: asMetadata,
+      stepUpScopes: stepUpScopes,
+    );
+  }
+
   /// Generate PKCE code verifier and challenge
   Map<String, String> _generatePkce() {
     final random = Random.secure();
@@ -77,7 +250,7 @@ class HttpOAuthClient implements OAuthClient {
 
     final params = <String, String>{
       'response_type': 'code',
-      'client_id': config.clientId,
+      'client_id': effectiveClientId,
       'code_challenge': pkce['code_challenge']!,
       'code_challenge_method': config.codeChallengeMethod,
       if (config.redirectUri != null) 'redirect_uri': config.redirectUri!,
@@ -98,17 +271,44 @@ class HttpOAuthClient implements OAuthClient {
   /// Get the current code verifier for PKCE
   String? get codeVerifier => _codeVerifier;
 
+  /// Validate the `iss` parameter returned on an authorization response
+  /// against the authorization server's issuer (RFC 9207, MCP 2026-07-28 auth
+  /// hardening). Defends against mix-up attacks: a response's `iss` MUST equal
+  /// the discovered AS issuer. Throws [OAuthError] on mismatch. A null
+  /// [responseIssuer] is tolerated only when the AS did not advertise
+  /// `authorization_response_iss_parameter_supported` — callers that receive
+  /// an `iss` MUST pass it.
+  Future<void> validateAuthorizationResponseIssuer(
+      String? responseIssuer) async {
+    if (responseIssuer == null) return;
+    final metadata = await _discoverMetadata();
+    if (responseIssuer != metadata.issuer) {
+      throw OAuthError(
+        error: 'invalid_issuer',
+        errorDescription:
+            'Authorization response `iss` ($responseIssuer) does not match '
+            'the authorization server issuer (${metadata.issuer}) — RFC 9207.',
+      );
+    }
+  }
+
+  /// Exchange an authorization code for tokens. When the authorization
+  /// response carried an `iss` parameter (RFC 9207), pass it as
+  /// [responseIssuer] — it is validated against the AS issuer before the
+  /// exchange (mix-up defense).
   @override
   Future<OAuthToken> exchangeCodeForToken({
     required String code,
     required String codeVerifier,
+    String? responseIssuer,
   }) async {
+    await validateAuthorizationResponseIssuer(responseIssuer);
     final metadata = await _discoverMetadata();
 
     final body = <String, String>{
       'grant_type': 'authorization_code',
       'code': code,
-      'client_id': config.clientId,
+      'client_id': effectiveClientId,
       'code_verifier': codeVerifier,
       if (config.redirectUri != null) 'redirect_uri': config.redirectUri!,
     };
@@ -150,7 +350,7 @@ class HttpOAuthClient implements OAuthClient {
     final body = <String, String>{
       'grant_type': 'refresh_token',
       'refresh_token': refreshToken,
-      'client_id': config.clientId,
+      'client_id': effectiveClientId,
     };
 
     final headers = <String, String>{
@@ -195,7 +395,7 @@ class HttpOAuthClient implements OAuthClient {
 
     final body = <String, String>{
       'token': token,
-      'client_id': config.clientId,
+      'client_id': effectiveClientId,
       if (tokenTypeHint != null) 'token_type_hint': tokenTypeHint,
     };
 
@@ -225,7 +425,7 @@ class HttpOAuthClient implements OAuthClient {
 
     final body = <String, String>{
       'grant_type': 'client_credentials',
-      'client_id': config.clientId,
+      'client_id': effectiveClientId,
       if (scopes != null && scopes.isNotEmpty) 'scope': scopes.join(' '),
     };
 
@@ -292,7 +492,7 @@ class HttpOAuthClient implements OAuthClient {
   }) {
     final queryParams = <String, String>{
       'response_type': 'code',
-      'client_id': config.clientId,
+      'client_id': effectiveClientId,
       'scope': scopes.join(' '),
       'state': state ?? _generateState(),
     };
@@ -322,7 +522,7 @@ class HttpOAuthClient implements OAuthClient {
       'grant_type': 'authorization_code',
       'code': authorizationCode,
       'code_verifier': codeVerifier,
-      'client_id': config.clientId,
+      'client_id': effectiveClientId,
       if (redirectUri != null) 'redirect_uri': redirectUri,
     };
   }
@@ -335,7 +535,7 @@ class HttpOAuthClient implements OAuthClient {
     return {
       'grant_type': 'refresh_token',
       'refresh_token': refreshToken,
-      'client_id': config.clientId,
+      'client_id': effectiveClientId,
       if (scopes != null && scopes.isNotEmpty) 'scope': scopes.join(' '),
     };
   }

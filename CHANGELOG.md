@@ -1,3 +1,34 @@
+## [2.1.0] - 2026-07-19 - 2025-11-25 conformance + 2026-07-28 stateless core (dormant)
+
+Additive, backward-compatible (all new fields optional/named; `==`/`hashCode`
+unchanged; behavior changes are negotiated-version gated). No public API removed.
+
+### Added — 2025-11-25 conformance
+- `ResourceTemplate.icons` (was dropped on resource templates).
+- Sampling tool-calling: `CreateMessageRequest.tools` / `toolChoice`
+  (`SamplingToolChoice` builders) + `CreateMessageResult.toolCalls` (SEP-1577).
+- Typed elicitation layer (`elicitation.dart`): `EnumSchema` (titled/untitled
+  `enumNames`), single- and multi-select enums (SEP-1330), URL-mode elicitation
+  (SEP-1036), primitive default values (SEP-1034); raw-map path preserved.
+- `Implementation.description` on `ClientInfo` / `ServerInfo`.
+- JSON Schema 2020-12 default dialect helper (SEP-1613).
+- OAuth: PRM discovery (RFC 9728, `WwwAuthenticateChallenge.parse` +
+  `discoverFrom401`), OIDC Discovery 1.0 (PR#797), Client ID Metadata Documents
+  (SEP-991, `OAuthConfig.clientIdMetadataUrl`), incremental scope step-up (SEP-835).
+
+### Deprecated
+- `CallToolResult.isStreaming` — non-standard hint, honored nowhere. Standard
+  streaming = enable via a tool (`tools/call`) + deliver via a reactive resource
+  (`Client.listen`/`subscriptions/listen`, or legacy `subscribeResource`).
+  Retained + serialized for backward compatibility; removed in 3.0.
+
+### Added — 2026-07-28 stateless core (BUILD-DORMANT, opt-in via `connect(statelessMode: true)`, default off)
+- `_meta` reverse-DNS keys (`McpRequestMeta`), `server/discover` (`Client.discover()`),
+  Multi-Round-Trip (`InputRequiredResult`), `subscriptions/listen` (`Client.listen`),
+  Extensions framework (`ClientCapabilities.extensions`), Tasks extension
+  (`getTask` / `updateTask` / `cancelTask`), RFC 9207 `iss` validation.
+- Inert until opted in — zero behavior change for existing consumers.
+
 ## [2.0.1] - 2026-07-13 - Spec-optional description parsing
 
 ### Fixed

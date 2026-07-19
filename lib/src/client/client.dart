@@ -3,7 +3,11 @@ import 'dart:convert';
 
 import '../../logger.dart';
 import '../models/models.dart';
+import '../models/elicitation.dart';
 import '../protocol/protocol.dart';
+import '../protocol/request_meta.dart';
+import '../protocol/multi_round_trip.dart';
+import '../protocol/tasks.dart';
 import '../transport/streamable_http_transport.dart';
 import '../transport/transport.dart';
 
@@ -16,6 +20,11 @@ class Client {
 
   /// Version of the MCP client implementation
   final String version;
+
+  /// Spec 2025-11-25+: optional human-readable description of this client
+  /// implementation. Emitted on `clientInfo` during initialize when set;
+  /// older peers ignore it (additive).
+  final String? description;
 
   /// Client capabilities configuration
   final ClientCapabilities capabilities;
@@ -54,6 +63,11 @@ class Client {
   final _requestHandlers =
       <String, Future<Map<String, dynamic>> Function(Map<String, dynamic>)>{};
 
+  /// Live 2026-07-28 `subscriptions/listen` streams (SEP-2577), keyed by the
+  /// subscriptionId (the listen request's JSON-RPC id). Populated only on the
+  /// stateless path via [listen].
+  final _subscriptions = <int, _ClientSubscription>{};
+
   /// Local roots advertised by this client. The server can fetch the
   /// list via the `roots/list` request — handled by the built-in
   /// incoming-request handler. Mutations push
@@ -75,6 +89,16 @@ class Client {
   /// Whether the client is currently connecting
   bool _connecting = false;
 
+  /// 2026-07-28 stateless-core mode (SEP-2577). Off by default (dormant). When
+  /// on, [connect] skips the `initialize` handshake, every request carries the
+  /// reverse-DNS `_meta` keys (protocol version + per-request client caps +
+  /// clientInfo) and the `MCP-Protocol-Version: 2026-07-28` header, and the
+  /// strict server==client version equality check is dropped.
+  bool _statelessMode = false;
+
+  /// Whether this client is operating in the 2026-07-28 stateless mode.
+  bool get isStateless => _statelessMode;
+
   /// Get the server capabilities
   ServerCapabilities? get serverCapabilities => _serverCapabilities;
 
@@ -95,6 +119,7 @@ class Client {
   Client({
     required this.name,
     required this.version,
+    this.description,
     this.capabilities = const ClientCapabilities(),
   }) {
     // Default `roots/list` handler returns the locally registered roots.
@@ -104,8 +129,18 @@ class Client {
         };
   }
 
-  /// Connect the client to a transport
-  Future<void> connect(ClientTransport transport) async {
+  /// Connect the client to a transport.
+  ///
+  /// When [statelessMode] is true, the client speaks the 2026-07-28 stateless
+  /// core: it skips the `initialize` handshake, marks the transport to stamp
+  /// `MCP-Protocol-Version: 2026-07-28` on every request, and attaches the
+  /// reverse-DNS `_meta` keys (client info + per-request capabilities) to each
+  /// outbound request. Server capabilities are fetched on demand via
+  /// [discover]. Default false (dormant) — the handshake path is unchanged.
+  Future<void> connect(
+    ClientTransport transport, {
+    bool statelessMode = false,
+  }) async {
     if (_transport != null) {
       throw McpError('Client is already connected to a transport');
     }
@@ -115,6 +150,7 @@ class Client {
     }
 
     _connecting = true;
+    _statelessMode = statelessMode;
     _transport = transport;
     _transport!.onMessage.listen(_handleMessage);
     _transport!.onClose
@@ -146,7 +182,20 @@ class Client {
 
     // Initialize the connection
     try {
-      await initialize();
+      if (_statelessMode) {
+        // Stateless core: no handshake. Record the version so the HTTP
+        // transport stamps `MCP-Protocol-Version: 2026-07-28`, and mark the
+        // client ready to send requests immediately. Server capabilities are
+        // fetched on demand via [discover].
+        _negotiatedProtocolVersion = McpProtocol.v2026_07_28;
+        final tx = _transport;
+        if (tx is StreamableHttpClientTransport) {
+          tx.setProtocolVersion(McpProtocol.v2026_07_28);
+        }
+        _initialized = true;
+      } else {
+        await initialize();
+      }
       _connecting = false;
 
       // Emit connection event after successful initialization
@@ -279,7 +328,13 @@ class Client {
 
     final response = await _sendRequest('initialize', {
       'protocolVersion': protocolVersion,
-      'clientInfo': {'name': name, 'version': version},
+      // Spec 2025-11-25+ allows `Implementation.description` on clientInfo;
+      // emitted only when set, so older peers see the pre-2025-11-25 shape.
+      'clientInfo': {
+        'name': name,
+        'version': version,
+        if (description != null) 'description': description,
+      },
       'capabilities': capabilities.toJson(),
     });
 
@@ -327,6 +382,87 @@ class Client {
   String? get negotiatedProtocolVersion => _negotiatedProtocolVersion;
   String? _negotiatedProtocolVersion;
 
+  /// 2026-07-28 stateless core: fetch the server's supported versions,
+  /// capabilities, and optional instructions via `server/discover`.
+  ///
+  /// Servers MUST implement `server/discover`; clients MAY call it (version
+  /// negotiation can also happen inline via per-request `_meta`). Callable
+  /// without a prior handshake. As a side effect the parsed
+  /// [ServerCapabilities] and server info are cached on this client
+  /// ([serverCapabilities] / [serverInfo]).
+  Future<DiscoverResult> discover() async {
+    if (!isConnected) {
+      throw McpError('Client is not connected to a transport');
+    }
+    final response = await _sendRequest('server/discover', {});
+    if (response == null) {
+      throw McpError('server/discover returned no result');
+    }
+    final map = Map<String, dynamic>.from(response as Map);
+
+    final versions = (map['supportedVersions'] as List?)
+            ?.map((v) => v.toString())
+            .toList() ??
+        const <String>[];
+    final capsData = map['capabilities'];
+    final caps = ServerCapabilities.fromJson(
+      capsData is Map ? Map<String, dynamic>.from(capsData) : {},
+    );
+    _serverCapabilities = caps;
+
+    // ResultMetaObject may carry `serverInfo` (2026-07-28).
+    final serverInfo = McpRequestMeta.readServerInfo(map['_meta']);
+    if (serverInfo != null) {
+      _serverInfo = serverInfo;
+    }
+
+    return DiscoverResult(
+      supportedVersions: versions,
+      capabilities: caps,
+      instructions: map['instructions'] as String?,
+      ttlMs: (map['ttlMs'] as num?)?.toInt(),
+      cacheScope: map['cacheScope'] as String?,
+      serverInfo: serverInfo,
+    );
+  }
+
+  // ── Tasks extension (io.modelcontextprotocol/tasks, 2026-07-28) ──────────
+
+  /// Whether the server advertised the tasks extension (from the last
+  /// `initialize`/`discover`). Task calls only make sense when true.
+  bool get supportsTasks =>
+      _serverCapabilities?.hasExtension(tasksExtensionId) ?? false;
+
+  /// If a `tools/call` (or other) result is a `CreateTaskResult`
+  /// (`resultType: "task"`), returns the [Task] handle; otherwise null.
+  Task? taskFromResult(Map<String, dynamic> result) =>
+      McpResultType.of(result) == McpResultType.task
+          ? Task.fromJson(result)
+          : null;
+
+  /// Poll a task's current state (`tasks/get`).
+  Future<Task> getTask(String taskId) async {
+    if (!isConnected) throw McpError('Client is not connected to a transport');
+    final response = await _sendRequest('tasks/get', {'taskId': taskId});
+    if (response == null) throw McpError('tasks/get returned no result');
+    return Task.fromJson(Map<String, dynamic>.from(response as Map));
+  }
+
+  /// Deliver input responses to an `input_required` task (`tasks/update`).
+  /// [inputResponses] is keyed by the task's outstanding `inputRequests` keys.
+  Future<void> updateTask(
+      String taskId, Map<String, dynamic> inputResponses) async {
+    if (!isConnected) throw McpError('Client is not connected to a transport');
+    await _sendRequest(
+        'tasks/update', {'taskId': taskId, 'inputResponses': inputResponses});
+  }
+
+  /// Cancel a task (`tasks/cancel`, cooperative + eventually consistent).
+  Future<void> cancelTask(String taskId) async {
+    if (!isConnected) throw McpError('Client is not connected to a transport');
+    await _sendRequest('tasks/cancel', {'taskId': taskId});
+  }
+
   /// Validate protocol version compatibility
   void _validateProtocolVersion(String serverProtoVersion) {
     _logger.warning(
@@ -357,7 +493,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.tools != true) {
+    if (!_statelessMode && _serverCapabilities?.tools != true) {
       throw McpError('Server does not support tools');
     }
 
@@ -375,7 +511,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.tools != true) {
+    if (!_statelessMode && _serverCapabilities?.tools != true) {
       throw McpError('Server does not support tools');
     }
 
@@ -385,7 +521,12 @@ class Client {
       'arguments': Map<String, dynamic>.from(toolArguments),
     };
 
-    final response = await _sendRequest('tools/call', params);
+    // 2026-07-28 (SEP-2577): a stateless `tools/call` may return
+    // `input_required`; the MRTR driver fulfills the server's input requests and
+    // re-issues until a terminal result. Legacy path = a single request.
+    final response = _statelessMode
+        ? await _sendRequestWithMrtr('tools/call', params)
+        : await _sendRequest('tools/call', params);
     return CallToolResult.fromJson(response);
   }
 
@@ -405,7 +546,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.tools != true) {
+    if (!_statelessMode && _serverCapabilities?.tools != true) {
       throw McpError('Server does not support tools');
     }
 
@@ -463,7 +604,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.resources != true) {
+    if (!_statelessMode && _serverCapabilities?.resources != true) {
       throw McpError('Server does not support resources');
     }
 
@@ -480,11 +621,13 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.resources != true) {
+    if (!_statelessMode && _serverCapabilities?.resources != true) {
       throw McpError('Server does not support resources');
     }
 
-    final response = await _sendRequest('resources/read', {'uri': uri});
+    final response = _statelessMode
+        ? await _sendRequestWithMrtr('resources/read', {'uri': uri})
+        : await _sendRequest('resources/read', {'uri': uri});
 
     return ReadResourceResult.fromJson(response);
   }
@@ -503,7 +646,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.resources != true) {
+    if (!_statelessMode && _serverCapabilities?.resources != true) {
       throw McpError('Server does not support resources');
     }
 
@@ -524,7 +667,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.resources != true) {
+    if (!_statelessMode && _serverCapabilities?.resources != true) {
       throw McpError('Server does not support resources');
     }
 
@@ -537,7 +680,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.resources != true) {
+    if (!_statelessMode && _serverCapabilities?.resources != true) {
       throw McpError('Server does not support resources');
     }
 
@@ -550,7 +693,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.resources != true) {
+    if (!_statelessMode && _serverCapabilities?.resources != true) {
       throw McpError('Server does not support resources');
     }
 
@@ -567,7 +710,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.prompts != true) {
+    if (!_statelessMode && _serverCapabilities?.prompts != true) {
       throw McpError('Server does not support prompts');
     }
 
@@ -585,7 +728,7 @@ class Client {
       throw McpError('Client is not initialized');
     }
 
-    if (_serverCapabilities?.prompts != true) {
+    if (!_statelessMode && _serverCapabilities?.prompts != true) {
       throw McpError('Server does not support prompts');
     }
 
@@ -597,7 +740,9 @@ class Client {
       params['arguments'] = Map<String, dynamic>.from(promptArguments);
     }
 
-    final response = await _sendRequest('prompts/get', params);
+    final response = _statelessMode
+        ? await _sendRequestWithMrtr('prompts/get', params)
+        : await _sendRequest('prompts/get', params);
     return GetPromptResult.fromJson(response);
   }
 
@@ -644,6 +789,26 @@ class Client {
     Future<Map<String, dynamic>> Function(Map<String, dynamic> params) handler,
   ) {
     _requestHandlers['elicitation/create'] = handler;
+  }
+
+  /// Typed variant of [onElicitationRequest] (spec 2025-11-25). The handler
+  /// receives a parsed [ElicitationRequest] — form fields typed as
+  /// [ElicitationFieldSchema] (strings/numbers/booleans with defaults,
+  /// single- and multi-select enums with `enumNames`), or a URL-mode request
+  /// (`mode: "url"`) — and returns a typed [ElicitationResponse].
+  ///
+  /// This is a convenience over the raw-map path; the wire behavior is
+  /// identical. Registering either handler overrides the other (both bind
+  /// the same `elicitation/create` slot). Calling this advertises the
+  /// `elicitation` client capability.
+  void onElicitationRequestTyped(
+    Future<ElicitationResponse> Function(ElicitationRequest request) handler,
+  ) {
+    _requestHandlers['elicitation/create'] = (params) async {
+      final req = ElicitationRequest.fromJson(params);
+      final res = await handler(req);
+      return res.toJson();
+    };
   }
 
   /// Register a custom handler for server-initiated `roots/list` requests.
@@ -961,6 +1126,16 @@ class Client {
   /// Handle a JSON-RPC response
   void _handleResponse(JsonRpcMessage response) {
     final id = response.id;
+    // 2026-07-28 (SEP-2577): the terminal `SubscriptionsListenResult` (id ==
+    // subscriptionId) closes the subscription stream gracefully.
+    if (id is int && _subscriptions.containsKey(id)) {
+      final sub = _subscriptions.remove(id)!;
+      if (!sub.ackCompleter.isCompleted) {
+        sub.ackCompleter.complete(const SubscriptionFilter());
+      }
+      if (!sub.controller.isClosed) sub.controller.close();
+      return;
+    }
     if (id == null || id is! int || !_requestCompleters.containsKey(id)) {
       _logger.debug('Received response with unknown id: $id');
       return;
@@ -983,6 +1158,31 @@ class Client {
   void _handleNotification(JsonRpcMessage notification) {
     final method = notification.method;
     final params = notification.params ?? {};
+
+    // 2026-07-28 (SEP-2577): a notification stamped with `_meta.subscriptionId`
+    // belongs to a `subscriptions/listen` stream. The first such message is the
+    // `acknowledged` notification (resolves the honored filter); the rest are
+    // stream notifications fed to the subscription's stream.
+    final subId = McpRequestMeta.readSubscriptionId(params['_meta']);
+    if (subId is int && _subscriptions.containsKey(subId)) {
+      final sub = _subscriptions[subId]!;
+      if (method == 'notifications/subscriptions/acknowledged') {
+        if (!sub.ackCompleter.isCompleted) {
+          final n = params['notifications'];
+          sub.ackCompleter.complete(n is Map
+              ? SubscriptionFilter.fromJson(Map<String, dynamic>.from(n))
+              : const SubscriptionFilter());
+        }
+        return;
+      }
+      if (method != null && !sub.controller.isClosed) {
+        sub.controller.add(SubscriptionNotification(
+          method: method,
+          params: Map<String, dynamic>.from(params),
+        ));
+      }
+      return;
+    }
 
     final handler = _notificationHandlers[method];
     if (handler != null) {
@@ -1014,6 +1214,15 @@ class Client {
 
     // Create a deep copy of params to avoid potential modification issues
     final Map<String, dynamic> safeParams = Map<String, dynamic>.from(params);
+
+    // 2026-07-28 stateless core: there is no handshake, so every request
+    // carries the client's identity + per-request capabilities in `_meta`
+    // under the reserved `io.modelcontextprotocol/*` keys, plus the required
+    // protocol version. Additive — the existing `_meta` (if the caller set
+    // one, e.g. a progressToken) is preserved.
+    if (_statelessMode) {
+      safeParams['_meta'] = _statelessMeta(safeParams['_meta']);
+    }
 
     final request = {
       'jsonrpc': McpProtocol.jsonRpcVersion,
@@ -1053,6 +1262,119 @@ class Client {
     }
   }
 
+  /// Build the stateless-path `_meta` (reverse-DNS client info + per-request
+  /// capabilities + protocol version), preserving any [existingMeta].
+  Map<String, dynamic> _statelessMeta(Object? existingMeta) => McpRequestMeta.build(
+        protocolVersion: McpProtocol.v2026_07_28,
+        clientCapabilities: capabilities.toJson(),
+        clientInfo: {
+          'name': name,
+          'version': version,
+          if (description != null) 'description': description,
+        },
+        extra:
+            existingMeta is Map ? Map<String, dynamic>.from(existingMeta) : null,
+      );
+
+  /// Maximum Multi-Round-Trip iterations before giving up (guards against a
+  /// server that keeps returning `input_required`).
+  static const int _mrtrMaxRounds = 16;
+
+  /// 2026-07-28 Multi-Round-Trip driver (SEP-2577). Sends [method]+[params] and,
+  /// while the stateless result is `input_required`, fulfills each embedded
+  /// server input request (`sampling/createMessage` / `roots/list` /
+  /// `elicitation/create`) with the client's registered handler, then re-issues
+  /// the ORIGINAL request carrying the matching `inputResponses` + the echoed
+  /// opaque `requestState`. Loops until a terminal (`complete`) result. On the
+  /// legacy path (or a non-stateless client) this is a single `_sendRequest`.
+  Future<Map<String, dynamic>> _sendRequestWithMrtr(
+      String method, Map<String, dynamic> params) async {
+    var currentParams = params;
+    for (var round = 0; round < _mrtrMaxRounds; round++) {
+      final raw = await _sendRequest(method, currentParams);
+      final result = raw is Map<String, dynamic>
+          ? raw
+          : Map<String, dynamic>.from(raw as Map);
+      if (!_statelessMode ||
+          McpResultType.of(result) != McpResultType.inputRequired) {
+        return result;
+      }
+      final required = InputRequiredResult.fromJson(result);
+      final inputResponses = <String, dynamic>{};
+      for (final entry in required.inputRequests.entries) {
+        final req = entry.value;
+        final reqMethod = req['method'] as String?;
+        if (reqMethod == null) {
+          throw McpError('InputRequest `${entry.key}` is missing a method');
+        }
+        final handler = _requestHandlers[reqMethod];
+        if (handler == null) {
+          throw McpError(
+              'No handler registered for server input request `$reqMethod`');
+        }
+        final reqParams = req['params'] is Map
+            ? Map<String, dynamic>.from(req['params'] as Map)
+            : <String, dynamic>{};
+        inputResponses[entry.key] = await handler(reqParams);
+      }
+      // Re-issue the ORIGINAL request (params) with the MRTR fields added.
+      currentParams = <String, dynamic>{
+        ...params,
+        if (inputResponses.isNotEmpty) 'inputResponses': inputResponses,
+        if (required.requestState != null) 'requestState': required.requestState,
+      };
+    }
+    throw McpError(
+        'Multi-round-trip exceeded $_mrtrMaxRounds rounds for `$method`');
+  }
+
+  /// Open a 2026-07-28 `subscriptions/listen` stream (SEP-2577) — the stateless
+  /// replacement for the `resources/subscribe` RPC + the HTTP GET SSE stream.
+  ///
+  /// Sends the request with the opt-in [filter]; the returned [Subscription]
+  /// exposes the server's acknowledged (honored) filter, the stream of stamped
+  /// notifications, and `cancel()` (which terminates the stream via
+  /// `notifications/cancelled`). Stateless mode only.
+  Future<Subscription> listen(SubscriptionFilter filter) async {
+    if (!_initialized) {
+      throw McpError('Client is not initialized');
+    }
+    if (!_statelessMode) {
+      throw McpError(
+          '`subscriptions/listen` requires the 2026-07-28 stateless mode');
+    }
+    final id = _requestId++;
+    final ackCompleter = Completer<SubscriptionFilter>();
+    final controller = StreamController<SubscriptionNotification>();
+    _subscriptions[id] = _ClientSubscription(
+      id: id,
+      ackCompleter: ackCompleter,
+      controller: controller,
+    );
+
+    final params = <String, dynamic>{
+      'notifications': filter.toJson(),
+      '_meta': _statelessMeta(null),
+    };
+    _transport!.send(<String, dynamic>{
+      'jsonrpc': McpProtocol.jsonRpcVersion,
+      'id': id,
+      'method': 'subscriptions/listen',
+      'params': params,
+    });
+
+    return Subscription(
+      subscriptionId: id,
+      acknowledged: ackCompleter.future,
+      notifications: controller.stream,
+      cancel: () {
+        if (_subscriptions.containsKey(id)) {
+          _sendNotification('notifications/cancelled', {'requestId': id});
+        }
+      },
+    );
+  }
+
   /// Send a JSON-RPC notification
   void _sendNotification(String method, Map<String, dynamic> params) {
     if (!isConnected) {
@@ -1067,6 +1389,56 @@ class Client {
 
     _transport!.send(notification);
   }
+}
+
+/// Internal holder for a live client-side `subscriptions/listen` stream.
+class _ClientSubscription {
+  final int id;
+  final Completer<SubscriptionFilter> ackCompleter;
+  final StreamController<SubscriptionNotification> controller;
+
+  _ClientSubscription({
+    required this.id,
+    required this.ackCompleter,
+    required this.controller,
+  });
+}
+
+/// Result of a `server/discover` call (2026-07-28 stateless core).
+///
+/// Mirrors the draft schema `DiscoverResult` (extends `CacheableResult`): the
+/// server's supported protocol versions, its capabilities, optional
+/// natural-language instructions, and the cache hints ([ttlMs]/[cacheScope]).
+class DiscoverResult {
+  /// Protocol versions the server supports; the client picks one for
+  /// subsequent requests.
+  final List<String> supportedVersions;
+
+  /// The server's advertised capabilities.
+  final ServerCapabilities capabilities;
+
+  /// Optional natural-language guidance describing the server (LLM
+  /// system-prompt hint).
+  final String? instructions;
+
+  /// Cache TTL hint in milliseconds (`CacheableResult.ttlMs`), if present.
+  final int? ttlMs;
+
+  /// Cache scope hint (`"public"` / `"private"`), if present.
+  final String? cacheScope;
+
+  /// Self-reported server software identity from the result `_meta`
+  /// (`io.modelcontextprotocol/serverInfo`), if present.
+  final Map<String, dynamic>? serverInfo;
+
+  const DiscoverResult({
+    required this.supportedVersions,
+    required this.capabilities,
+    this.instructions,
+    this.ttlMs,
+    this.cacheScope,
+    this.serverInfo,
+  });
 }
 
 /// Reason for disconnection

@@ -12,6 +12,7 @@ import 'src/models/models.dart';
 import 'src/auth/oauth.dart';
 
 export 'src/models/models.dart';
+export 'src/models/elicitation.dart';
 export 'src/client/client.dart';
 export 'src/transport/transport.dart';
 export 'src/transport/streamable_http_transport.dart';
@@ -19,8 +20,12 @@ export 'src/transport/sse_auth_transport.dart';
 export 'src/transport/sse_compressed_transport.dart';
 export 'src/transport/sse_heartbeat_transport.dart';
 export 'src/protocol/protocol.dart';
+export 'src/protocol/request_meta.dart';
+export 'src/protocol/multi_round_trip.dart';
+export 'src/protocol/tasks.dart';
 export 'src/auth/oauth.dart';
 export 'src/auth/oauth_client.dart';
+export 'src/auth/oauth_discovery.dart';
 export 'src/common/result.dart';
 export 'src/common/connection_state.dart';
 export 'logger.dart';
@@ -33,6 +38,10 @@ class McpClientConfig {
 
   /// The version of the client application
   final String version;
+
+  /// Spec 2025-11-25+: optional human-readable description of the client
+  /// implementation, forwarded to `clientInfo.description` on initialize.
+  final String? description;
 
   /// The capabilities supported by the client
   final ClientCapabilities capabilities;
@@ -52,6 +61,7 @@ class McpClientConfig {
   const McpClientConfig({
     required this.name,
     required this.version,
+    this.description,
     this.capabilities = const ClientCapabilities(),
     this.maxRetries = 3,
     this.retryDelay = const Duration(seconds: 2),
@@ -63,6 +73,7 @@ class McpClientConfig {
   McpClientConfig copyWith({
     String? name,
     String? version,
+    String? description,
     ClientCapabilities? capabilities,
     int? maxRetries,
     Duration? retryDelay,
@@ -72,6 +83,7 @@ class McpClientConfig {
     return McpClientConfig(
       name: name ?? this.name,
       version: version ?? this.version,
+      description: description ?? this.description,
       capabilities: capabilities ?? this.capabilities,
       maxRetries: maxRetries ?? this.maxRetries,
       retryDelay: retryDelay ?? this.retryDelay,
@@ -86,6 +98,7 @@ class McpClientConfig {
       other is McpClientConfig &&
           name == other.name &&
           version == other.version &&
+          description == other.description &&
           capabilities == other.capabilities &&
           maxRetries == other.maxRetries &&
           retryDelay == other.retryDelay &&
@@ -96,6 +109,7 @@ class McpClientConfig {
   int get hashCode => Object.hash(
     name,
     version,
+    description,
     capabilities,
     maxRetries,
     retryDelay,
@@ -108,6 +122,7 @@ class McpClientConfig {
       'McpClientConfig('
       'name: $name, '
       'version: $version, '
+      'description: $description, '
       'capabilities: $capabilities, '
       'maxRetries: $maxRetries, '
       'retryDelay: $retryDelay, '
@@ -248,6 +263,7 @@ class McpClient {
     return Client(
       name: config.name,
       version: config.version,
+      description: config.description,
       capabilities: config.capabilities,
     );
   }
@@ -427,11 +443,13 @@ class McpClient {
   static McpClientConfig simpleConfig({
     required String name,
     required String version,
+    String? description,
     bool enableDebugLogging = false,
   }) {
     return McpClientConfig(
       name: name,
       version: version,
+      description: description,
       enableDebugLogging: enableDebugLogging,
     );
   }
@@ -440,11 +458,13 @@ class McpClient {
   static McpClientConfig productionConfig({
     required String name,
     required String version,
+    String? description,
     ClientCapabilities? capabilities,
   }) {
     return McpClientConfig(
       name: name,
       version: version,
+      description: description,
       capabilities: capabilities ?? const ClientCapabilities(),
       maxRetries: 5,
       retryDelay: const Duration(seconds: 1),

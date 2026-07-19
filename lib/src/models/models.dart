@@ -329,12 +329,23 @@ class Tool {
 class CallToolResult {
   final List<Content> content;
   final Map<String, dynamic>? structuredContent;
+
+  /// NON-STANDARD (makemind) legacy hint. Not part of the MCP `CallToolResult`
+  /// spec and honored nowhere. The standard pattern is: **enable** streaming
+  /// with a tool (`tools/call`) and **deliver** the stream via a reactive
+  /// resource (`subscriptions/listen` on 2026-07-28, `resources/subscribe` on
+  /// ≤2025-11-25). Retained + still serialized for backward compatibility;
+  /// slated for removal in the next major (3.0).
+  @Deprecated(
+      'Non-standard hint, honored nowhere. Enable streaming via a tool and '
+      'deliver via a reactive resource (subscriptions/listen). Removed in 3.0.')
   final bool isStreaming;
   final bool? isError;
 
   const CallToolResult(
     this.content, {
     this.structuredContent,
+    @Deprecated('See CallToolResult.isStreaming — removed in 3.0.')
     this.isStreaming = false,
     this.isError,
   });
@@ -343,6 +354,7 @@ class CallToolResult {
     return {
       'content': content.map((c) => c.toJson()).toList(),
       if (structuredContent != null) 'structuredContent': structuredContent,
+      // ignore: deprecated_member_use_from_same_package
       'isStreaming': isStreaming,
       if (isError != null) 'isError': isError,
     };
@@ -359,6 +371,7 @@ class CallToolResult {
     return CallToolResult(
       contents,
       structuredContent: json['structuredContent'] as Map<String, dynamic>?,
+      // ignore: deprecated_member_use_from_same_package
       isStreaming: json['isStreaming'] as bool? ?? false,
       isError: json['isError'] as bool?,
     );
@@ -430,11 +443,17 @@ class ResourceTemplate {
   final String description;
   final String? mimeType;
 
+  /// Spec 2025-11-25+: visual metadata (icon objects). Previously dropped
+  /// on the client — resource templates now round-trip icons like tools,
+  /// resources, and prompts.
+  final List<Map<String, dynamic>>? icons;
+
   const ResourceTemplate({
     required this.uriTemplate,
     required this.name,
     required this.description,
     this.mimeType,
+    this.icons,
   });
 
   Map<String, dynamic> toJson() {
@@ -446,6 +465,9 @@ class ResourceTemplate {
     if (mimeType != null) {
       result['mimeType'] = mimeType;
     }
+    if (icons != null) {
+      result['icons'] = icons;
+    }
     return result;
   }
 
@@ -456,6 +478,9 @@ class ResourceTemplate {
       // OPTIONAL per the MCP spec — see Tool.fromJson.
       description: json['description'] as String? ?? '',
       mimeType: json['mimeType'] as String?,
+      icons: (json['icons'] as List?)
+          ?.map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(),
     );
   }
 }
@@ -746,7 +771,13 @@ class ModelPreferences {
   }
 }
 
-/// Create message request for sampling
+/// Create message request for sampling.
+///
+/// Spec 2025-11-25+ adds sampling tool calling: [tools] advertises tool
+/// definitions the sampled model may call, and [toolChoice] steers whether
+/// / which tool it must use. Both are gated by
+/// `McpProtocol.supportsSamplingTools(negotiatedVersion)`; older peers omit
+/// them and the fields serialize away (additive).
 @immutable
 class CreateMessageRequest {
   final List<Message> messages;
@@ -758,6 +789,18 @@ class CreateMessageRequest {
   final List<String>? stopSequences;
   final Map<String, dynamic>? metadata;
 
+  /// Spec 2025-11-25+: tool definitions offered to the sampled model. Reuses
+  /// the [Tool] schema (`name` / `description` / `inputSchema`), matching how
+  /// tools are modeled everywhere else in the protocol.
+  final List<Tool>? tools;
+
+  /// Spec 2025-11-25+: tool-selection directive. Carried losslessly — the
+  /// wire value is either a mode string (`"auto"` / `"none"` / `"required"`)
+  /// or an object naming a specific tool (e.g. `{"type":"tool","name":"…"}`).
+  /// Modeled as [Object] rather than a rigid enum so any peer-defined shape
+  /// round-trips without loss; use [SamplingToolChoice] helpers to build it.
+  final Object? toolChoice;
+
   const CreateMessageRequest({
     required this.messages,
     this.modelPreferences,
@@ -767,6 +810,8 @@ class CreateMessageRequest {
     this.temperature,
     this.stopSequences,
     this.metadata,
+    this.tools,
+    this.toolChoice,
   });
 
   Map<String, dynamic> toJson() {
@@ -794,6 +839,12 @@ class CreateMessageRequest {
     if (metadata != null && metadata!.isNotEmpty) {
       result['metadata'] = Map<String, dynamic>.from(metadata!);
     }
+    if (tools != null) {
+      result['tools'] = tools!.map((t) => t.toJson()).toList();
+    }
+    if (toolChoice != null) {
+      result['toolChoice'] = toolChoice;
+    }
     return result;
   }
 
@@ -808,6 +859,11 @@ class CreateMessageRequest {
         json['stopSequences'] as List<dynamic>?;
     final stopSequences =
         stopSequencesList?.map((sequence) => sequence as String).toList();
+
+    final List<dynamic>? toolsList = json['tools'] as List<dynamic>?;
+    final tools = toolsList
+        ?.map((t) => Tool.fromJson(Map<String, dynamic>.from(t as Map)))
+        .toList();
 
     return CreateMessageRequest(
       messages: messages,
@@ -830,11 +886,44 @@ class CreateMessageRequest {
               ? (json['metadata'] as Map<dynamic, dynamic>)
                   .cast<String, dynamic>()
               : null,
+      tools: tools,
+      toolChoice: json['toolChoice'],
     );
   }
 }
 
-/// Create message result from sampling
+/// Builders for the sampling [CreateMessageRequest.toolChoice] directive
+/// (spec 2025-11-25+). The wire value is intentionally kept loose (see the
+/// field doc) — these helpers produce the two canonical shapes without
+/// forcing callers to hand-write maps.
+class SamplingToolChoice {
+  const SamplingToolChoice._();
+
+  /// Let the model decide whether to call a tool.
+  static const String auto = 'auto';
+
+  /// Forbid tool calls for this turn.
+  static const String none = 'none';
+
+  /// Require the model to call some tool.
+  static const String required = 'required';
+
+  /// Require the model to call the named [toolName].
+  static Map<String, dynamic> tool(String toolName) => {
+        'type': 'tool',
+        'name': toolName,
+      };
+}
+
+/// Create message result from sampling.
+///
+/// Spec 2025-11-25+ adds sampling tool calling: when the model responds by
+/// invoking tools (rather than emitting a final message), the result carries
+/// the requested calls in [toolCalls] and typically reports a tool-use
+/// [stopReason]. [toolCalls] is carried losslessly (each entry is the raw
+/// tool-call object as sent by the peer) so the caller can dispatch the
+/// calls and continue the sampling loop; it is absent for plain completions,
+/// keeping older-revision results unchanged (additive).
 @immutable
 class CreateMessageResult {
   final String model;
@@ -842,12 +931,21 @@ class CreateMessageResult {
   final String role;
   final Content content;
 
+  /// Spec 2025-11-25+: tool calls the model requested, when the sampling
+  /// turn resolved to tool use instead of a final message. Null when the
+  /// model returned a normal completion.
+  final List<Map<String, dynamic>>? toolCalls;
+
   const CreateMessageResult({
     required this.model,
     this.stopReason,
     required this.role,
     required this.content,
+    this.toolCalls,
   });
+
+  /// Whether this sampling turn resolved to tool calls (spec 2025-11-25+).
+  bool get hasToolCalls => toolCalls != null && toolCalls!.isNotEmpty;
 
   Map<String, dynamic> toJson() {
     final result = <String, dynamic>{
@@ -858,17 +956,26 @@ class CreateMessageResult {
     if (stopReason != null) {
       result['stopReason'] = stopReason;
     }
+    if (toolCalls != null) {
+      result['toolCalls'] = toolCalls;
+    }
     return result;
   }
 
   factory CreateMessageResult.fromJson(Map<String, dynamic> json) {
     final contentMap = json['content'] as Map<String, dynamic>;
 
+    final List<dynamic>? toolCallsList = json['toolCalls'] as List<dynamic>?;
+    final toolCalls = toolCallsList
+        ?.map((c) => Map<String, dynamic>.from(c as Map))
+        .toList();
+
     return CreateMessageResult(
       model: json['model'] as String,
       stopReason: json['stopReason'] as String?,
       role: json['role'] as String,
       content: Content.fromJson(contentMap),
+      toolCalls: toolCalls,
     );
   }
 }
@@ -1195,6 +1302,10 @@ class CachedResource {
 class ServerInfo {
   final String name;
   final String version;
+
+  /// Spec 2025-11-25+: human-readable description of the server
+  /// implementation (shared `Implementation.description` field).
+  final String? description;
   final String? protocolVersion;
   final Map<String, dynamic>? capabilities;
   final Map<String, dynamic>? metadata;
@@ -1202,6 +1313,7 @@ class ServerInfo {
   const ServerInfo({
     required this.name,
     required this.version,
+    this.description,
     this.protocolVersion,
     this.capabilities,
     this.metadata,
@@ -1209,6 +1321,7 @@ class ServerInfo {
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{'name': name, 'version': version};
+    if (description != null) json['description'] = description!;
     if (protocolVersion != null) json['protocolVersion'] = protocolVersion!;
     if (capabilities != null) json['capabilities'] = capabilities!;
     if (metadata != null) json['metadata'] = metadata!;
@@ -1219,6 +1332,7 @@ class ServerInfo {
     return ServerInfo(
       name: json['name'] as String,
       version: json['version'] as String,
+      description: json['description'] as String?,
       protocolVersion: json['protocolVersion'] as String?,
       capabilities: json['capabilities'] as Map<String, dynamic>?,
       metadata: json['metadata'] as Map<String, dynamic>?,
@@ -1226,23 +1340,33 @@ class ServerInfo {
   }
 }
 
-/// Client information (2025-03-26 compliant)
+/// Client information (2025-03-26 compliant).
+///
+/// Spec 2025-11-25+ adds [description] to the `Implementation` object
+/// (shared by `clientInfo` / `serverInfo`) — a human-readable summary of the
+/// implementation. Emitted only when set; older peers ignore the extra key
+/// (additive).
 @immutable
 class ClientInfo {
   final String name;
   final String version;
+
+  /// Spec 2025-11-25+: human-readable description of this implementation.
+  final String? description;
   final Map<String, dynamic>? capabilities;
   final Map<String, dynamic>? metadata;
 
   const ClientInfo({
     required this.name,
     required this.version,
+    this.description,
     this.capabilities,
     this.metadata,
   });
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{'name': name, 'version': version};
+    if (description != null) json['description'] = description!;
     if (capabilities != null) json['capabilities'] = capabilities!;
     if (metadata != null) json['metadata'] = metadata!;
     return json;
@@ -1252,6 +1376,7 @@ class ClientInfo {
     return ClientInfo(
       name: json['name'] as String,
       version: json['version'] as String,
+      description: json['description'] as String?,
       capabilities: json['capabilities'] as Map<String, dynamic>?,
       metadata: json['metadata'] as Map<String, dynamic>?,
     );
@@ -1276,13 +1401,23 @@ class ClientCapabilities {
   /// `elicitation/create` (spec 2025-06-18+).
   final bool elicitation;
 
+  /// Extensions framework (MCP 2026-07-28). Keys are reverse-DNS extension
+  /// identifiers (e.g. `io.modelcontextprotocol/tasks`); values are
+  /// per-extension settings (empty object = supported, no settings).
+  /// Additive — absent/empty for peers that do not use extensions.
+  final Map<String, Map<String, dynamic>>? extensions;
+
   /// Create a capabilities object with specified settings
   const ClientCapabilities({
     this.roots = false,
     this.rootsListChanged = false,
     this.sampling = false,
     this.elicitation = false,
+    this.extensions,
   });
+
+  /// Whether this set advertises the extension [id] (reverse-DNS key).
+  bool hasExtension(String id) => extensions?.containsKey(id) ?? false;
 
   /// Convert capabilities to JSON
   Map<String, dynamic> toJson() {
@@ -1300,6 +1435,10 @@ class ClientCapabilities {
       result['elicitation'] = {};
     }
 
+    if (extensions != null && extensions!.isNotEmpty) {
+      result['extensions'] = extensions;
+    }
+
     return result;
   }
 
@@ -1307,12 +1446,16 @@ class ClientCapabilities {
     final rootsConfig = json['roots'] as Map<String, dynamic>?;
     final samplingConfig = json['sampling'] as Map<String, dynamic>?;
     final elicitationConfig = json['elicitation'] as Map<String, dynamic>?;
+    final extensionsConfig = json['extensions'] as Map?;
 
     return ClientCapabilities(
       roots: rootsConfig != null,
       rootsListChanged: rootsConfig?['listChanged'] as bool? ?? false,
       sampling: samplingConfig != null,
       elicitation: elicitationConfig != null,
+      extensions: extensionsConfig?.map(
+        (k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map)),
+      ),
     );
   }
 }
@@ -1344,6 +1487,11 @@ class ServerCapabilities {
   /// Sampling support
   final bool sampling;
 
+  /// Extensions framework (MCP 2026-07-28). Reverse-DNS keyed extension
+  /// identifiers → per-extension settings, as advertised by the server via
+  /// `server/discover` / initialize. Additive.
+  final Map<String, Map<String, dynamic>>? extensions;
+
   /// Create a capabilities object with specified settings
   const ServerCapabilities({
     this.tools = false,
@@ -1354,7 +1502,12 @@ class ServerCapabilities {
     this.promptsListChanged = false,
     this.logging = false,
     this.sampling = false,
+    this.extensions,
   });
+
+  /// Whether the server advertises the extension [id] (reverse-DNS key),
+  /// e.g. `io.modelcontextprotocol/tasks`.
+  bool hasExtension(String id) => extensions?.containsKey(id) ?? false;
 
   /// Create capabilities from JSON
   factory ServerCapabilities.fromJson(Map<String, dynamic> json) {
@@ -1378,6 +1531,7 @@ class ServerCapabilities {
         json['sampling'] != null
             ? Map<String, dynamic>.from(json['sampling'] as Map)
             : null;
+    final extensionsConfig = json['extensions'] as Map?;
 
     return ServerCapabilities(
       tools: toolsConfig != null,
@@ -1388,6 +1542,9 @@ class ServerCapabilities {
       promptsListChanged: promptsConfig?['listChanged'] as bool? ?? false,
       logging: loggingConfig != null,
       sampling: samplingConfig != null,
+      extensions: extensionsConfig?.map(
+        (k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map)),
+      ),
     );
   }
 
@@ -1412,6 +1569,10 @@ class ServerCapabilities {
 
     if (sampling) {
       result['sampling'] = {};
+    }
+
+    if (extensions != null && extensions!.isNotEmpty) {
+      result['extensions'] = extensions;
     }
 
     return result;

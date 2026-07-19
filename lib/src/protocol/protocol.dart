@@ -20,7 +20,27 @@ class McpProtocol {
   /// primitives.
   static const String v2025_11_25 = "2025-11-25";
 
+  /// Protocol version 2026-07-28 — BREAKING: stateless core (removes the
+  /// `initialize`/`initialized` handshake and `Mcp-Session-Id`; client
+  /// info/caps ride `_meta` on every request; `server/discover` fetches
+  /// caps on demand), Extensions framework, Tasks extension, auth
+  /// hardening, deprecations (Roots/Sampling/Logging). Adopted as an
+  /// additive, version-gated parallel path — the handshake path stays for
+  /// ≤2025-11-25 peers. NOT yet in [supportedVersions] until the stateless
+  /// request path lands (opt-in via a stateless connection mode).
+  static const String v2026_07_28 = "2026-07-28";
+
+  /// Whether the [version] uses the stateless core (no handshake/session):
+  /// client info/caps in `_meta` per request, `server/discover` for caps,
+  /// `MCP-Protocol-Version` as the sole version signal. Introduced
+  /// 2026-07-28. See `docs/STATELESS-COEXISTENCE-DESIGN.md`.
+  static bool isStateless(String version) => version == v2026_07_28;
+
   /// Supported protocol versions in order of preference (newest first).
+  ///
+  /// `v2026_07_28` is intentionally NOT listed yet: it is declared but its
+  /// stateless request path is not implemented, so the server must not
+  /// advertise it during handshake negotiation until that lands.
   static const List<String> supportedVersions = [
     v2025_11_25,
     v2025_06_18,
@@ -46,6 +66,67 @@ class McpProtocol {
   /// (mandatory from 2025-06-18).
   static bool requiresProtocolHeader(String version) =>
       version == v2025_06_18 || version == v2025_11_25;
+
+  /// Whether the negotiated [version] understands `icons`, sampling
+  /// `tools` / `toolChoice`, URL-mode elicitation, multi-select /
+  /// default-valued elicitation primitives, and `Implementation.description`
+  /// (all introduced in 2025-11-25). Mirrors the server package's
+  /// `McpProtocol.supportsIconsAndSamplingTools` predicate so both sides
+  /// gate the same behavior on the same negotiated revision.
+  static bool supportsIconsAndSamplingTools(String version) =>
+      version == v2025_11_25;
+
+  /// Whether the negotiated [version] understands sampling tool calling —
+  /// the `tools` / `toolChoice` request fields and tool-call results on
+  /// `sampling/createMessage` (SEP: sampling with tools, 2025-11-25). Alias
+  /// of [supportsIconsAndSamplingTools] scoped to the sampling surface.
+  static bool supportsSamplingTools(String version) =>
+      supportsIconsAndSamplingTools(version);
+
+  /// Whether the negotiated [version] understands URL-mode elicitation
+  /// (`mode: "url"`, SEP-1036), multi-select enums (SEP-1330), and default
+  /// values in elicitation primitives (SEP-1034). All landed in 2025-11-25.
+  static bool supportsUrlElicitation(String version) =>
+      version == v2025_11_25;
+
+  /// Whether the negotiated [version] carries `Implementation.description`
+  /// on `clientInfo` / `serverInfo` (2025-11-25). Older peers ignore an
+  /// emitted `description`, so emission is additive; this predicate exists
+  /// so callers may suppress it for strict older-revision fixtures.
+  static bool supportsImplementationDescription(String version) =>
+      version == v2025_11_25;
+
+  /// Canonical JSON Schema dialect for tool `inputSchema` / `outputSchema`
+  /// and elicitation `requestedSchema` when the negotiated revision is
+  /// 2025-11-25+ (SEP-1613). A schema that omits `$schema` is interpreted
+  /// against this dialect; existing schemas that declare their own
+  /// `$schema` are left untouched.
+  static const String jsonSchemaDialect2020_12 =
+      "https://json-schema.org/draft/2020-12/schema";
+
+  /// The default JSON Schema dialect a peer should assume for schemas that
+  /// omit `$schema` under the negotiated [version]. 2025-11-25 pins
+  /// 2020-12 (SEP-1613); earlier revisions left the dialect unspecified
+  /// (returns null — callers must not stamp a dialect for those peers).
+  static String? defaultSchemaDialect(String version) =>
+      version == v2025_11_25 ? jsonSchemaDialect2020_12 : null;
+
+  /// Return a copy of [schema] annotated with the 2020-12 `$schema`
+  /// dialect when (a) the negotiated [version] pins a default dialect and
+  /// (b) the schema does not already declare its own `$schema`. Free-form
+  /// schemas that already carry a `$schema` — or any schema under an older
+  /// negotiated revision — are returned unchanged. Non-mutating: the input
+  /// map is never modified.
+  static Map<String, dynamic> schemaWithDefaultDialect(
+    Map<String, dynamic> schema,
+    String version,
+  ) {
+    final dialect = defaultSchemaDialect(version);
+    if (dialect == null || schema.containsKey(r'$schema')) {
+      return schema;
+    }
+    return <String, dynamic>{r'$schema': dialect, ...schema};
+  }
 
   /// JSON-RPC version
   static const String jsonRpcVersion = "2.0";

@@ -10,6 +10,7 @@ import 'package:meta/meta.dart';
 import '../../logger.dart';
 import '../auth/oauth.dart';
 import '../auth/oauth_client.dart';
+import '../auth/oauth_discovery.dart';
 import '../models/models.dart';
 import '../protocol/protocol.dart';
 import 'event_source.dart';
@@ -171,7 +172,13 @@ class StreamableHttpClientTransport implements ClientTransport {
     }
 
     _sendRequest(message).catchError((error) {
-      _messageController.addError(error);
+      // A long-lived stateless `subscriptions/listen` SSE POST can still be
+      // unwinding when the transport is torn down (disconnect force-closes the
+      // connection). Guard against reporting the resulting connection error onto
+      // an already-closed controller.
+      if (!_isClosed && !_messageController.isClosed) {
+        _messageController.addError(error);
+      }
     });
   }
 
@@ -200,9 +207,12 @@ class StreamableHttpClientTransport implements ClientTransport {
 
       // Spec 2025-06-18+: every post-handshake HTTP request MUST carry
       // the negotiated protocol version. Older revisions ignore this
-      // header. Set via [setProtocolVersion] after initialize.
+      // header. Set via [setProtocolVersion] after initialize. On the
+      // 2026-07-28 stateless path the header is the sole version signal, so
+      // it is always attached there too.
       if (_protocolVersion != null &&
-          McpProtocol.requiresProtocolHeader(_protocolVersion!)) {
+          (McpProtocol.requiresProtocolHeader(_protocolVersion!) ||
+              McpProtocol.isStateless(_protocolVersion!))) {
         headers['MCP-Protocol-Version'] = _protocolVersion!;
       }
 
@@ -213,7 +223,20 @@ class StreamableHttpClientTransport implements ClientTransport {
           headers['Authorization'] = 'Bearer $token';
         } on OAuthError catch (e) {
           if (e.error == 'no_valid_token') {
-            // Send 401 to trigger OAuth flow
+            // Send 401 to trigger OAuth flow.
+            //
+            // `-32001` here is a CLIENT-INTERNAL "authentication required"
+            // sentinel injected into the message stream so the OAuth layer
+            // engages — it is NOT the spec's resource-not-found code. In the
+            // makemind ecosystem resource-not-found is `-32001` on the server
+            // side too, but the semantics of THIS injected error are auth, not
+            // a resource lookup, and it originates from the client rather than
+            // a peer response. Renaming it to `-32002` would (a) collide with
+            // the server's `promptNotFound` / this client's
+            // `errorResourceAccessDenied` and (b) break existing OAuth-trigger
+            // consumers that key on this sentinel. Left as-is for all
+            // negotiated versions (A1). The 2026-07-28 resource-not-found move
+            // to `-32602` (INVALID_PARAMS) is a Part-B, version-gated concern.
             _messageController.add({
               'jsonrpc': '2.0',
               'error': {
@@ -286,14 +309,34 @@ class StreamableHttpClientTransport implements ClientTransport {
       }
 
       if (response.statusCode == 401) {
-        // Authentication required - trigger OAuth flow
+        // Authentication required - trigger OAuth flow.
+        //
+        // `-32001` is the same client-internal auth sentinel as above (see
+        // the `no_valid_token` branch): an auth signal, not the spec's
+        // resource-not-found code. Left unchanged for all negotiated
+        // versions (A1).
+        //
+        // MCP 2025-11-25 (RFC 9728 / SEP-985 / SEP-835, A5/A6): parse the
+        // server's `WWW-Authenticate` challenge so consumers receive
+        // actionable, structured discovery data — the RFC 9728 PRM URL
+        // (`resource_metadata=`) and the required step-up `scope=` — instead
+        // of only the raw header. The full discovery chain (PRM fetch → AS
+        // discovery via RFC 8414/OIDC) is driven by
+        // `HttpOAuthClient.discoverFrom401`, reusing the existing token flow.
+        final rawChallenge = response.headers['www-authenticate'];
+        final challenge = WwwAuthenticateChallenge.parse(rawChallenge);
         _messageController.add({
           'jsonrpc': '2.0',
           'error': {
             'code': -32001,
             'message': 'Authentication required',
             'data': {
-              'www_authenticate': response.headers['www-authenticate'],
+              'www_authenticate': rawChallenge,
+              if (challenge?.resourceMetadata != null)
+                'resource_metadata': challenge!.resourceMetadata,
+              if (challenge != null && challenge.scopes.isNotEmpty)
+                'scope': challenge.scope,
+              'resource_url': config.baseUrl,
               'oauth_config_hint': config.oauthConfig?.toJson(),
             },
           },

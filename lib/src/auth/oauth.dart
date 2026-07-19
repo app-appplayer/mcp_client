@@ -30,6 +30,16 @@ class OAuthConfig {
   /// Client ID
   final String clientId;
 
+  /// Client ID Metadata Document URL (SEP-991, CIMD).
+  ///
+  /// MCP 2025-11-25 lets a client identify itself with an `https` URL that
+  /// resolves to a Client ID Metadata Document, as an alternative to a
+  /// pre-registered [clientId]. When non-null this URL is carried through as
+  /// the `client_id` on authorization/token requests (see
+  /// [HttpOAuthClient.effectiveClientId]). Additive: no server-side validation
+  /// is invented here — the client merely presents the URL per SEP-991.
+  final String? clientIdMetadataUrl;
+
   /// Client secret (for confidential clients)
   final String? clientSecret;
 
@@ -50,6 +60,7 @@ class OAuthConfig {
     required this.authorizationEndpoint,
     required this.tokenEndpoint,
     required this.clientId,
+    this.clientIdMetadataUrl,
     this.clientSecret,
     this.redirectUri,
     this.scopes = const [],
@@ -63,6 +74,7 @@ class OAuthConfig {
     'authorizationEndpoint': authorizationEndpoint,
     'tokenEndpoint': tokenEndpoint,
     'clientId': clientId,
+    if (clientIdMetadataUrl != null) 'clientIdMetadataUrl': clientIdMetadataUrl,
     if (clientSecret != null) 'clientSecret': clientSecret,
     if (redirectUri != null) 'redirectUri': redirectUri,
     'scopes': scopes,
@@ -75,6 +87,7 @@ class OAuthConfig {
     authorizationEndpoint: json['authorizationEndpoint'] as String,
     tokenEndpoint: json['tokenEndpoint'] as String,
     clientId: json['clientId'] as String,
+    clientIdMetadataUrl: json['clientIdMetadataUrl'] as String?,
     clientSecret: json['clientSecret'] as String?,
     redirectUri: json['redirectUri'] as String?,
     scopes: (json['scopes'] as List<dynamic>?)?.cast<String>() ?? const [],
