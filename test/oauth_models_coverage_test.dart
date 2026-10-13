@@ -285,7 +285,8 @@ void main() {
       expect(metadata.responseTypesSupported, ['code']);
       expect(metadata.grantTypesSupported,
           ['authorization_code', 'refresh_token']);
-      expect(metadata.codeChallengeMethodsSupported, ['S256']);
+      // Absent means the server does not support PKCE: no default is assumed.
+      expect(metadata.codeChallengeMethodsSupported, isNull);
       expect(metadata.registrationEndpoint, isNull);
       expect(metadata.revocationEndpoint, isNull);
       expect(metadata.introspectionEndpoint, isNull);

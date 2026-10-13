@@ -16,7 +16,7 @@ void main() {
         'inputSchema': {'type': 'object'},
       });
       expect(tool.name, 'verify.ping');
-      expect(tool.description, '');
+      expect(tool.description, isNull);
     });
 
     test('Resource.fromJson tolerates a missing description', () {
@@ -25,7 +25,7 @@ void main() {
         'name': 'app',
       });
       expect(resource.uri, 'ui://app');
-      expect(resource.description, '');
+      expect(resource.description, isNull);
     });
 
     test('ResourceTemplate.fromJson tolerates a missing description', () {
@@ -34,7 +34,7 @@ void main() {
         'name': 'files',
       });
       expect(template.uriTemplate, 'file:///{path}');
-      expect(template.description, '');
+      expect(template.description, isNull);
     });
 
     test('present descriptions still round-trip', () {

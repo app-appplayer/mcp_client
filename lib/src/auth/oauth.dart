@@ -43,6 +43,10 @@ class OAuthConfig {
   /// Client secret (for confidential clients)
   final String? clientSecret;
 
+  /// The canonical URI of the MCP server the tokens are for (RFC 8707
+  /// `resource`, sent on authorization and token requests).
+  final String? resource;
+
   /// Redirect URI
   final String? redirectUri;
 
@@ -62,6 +66,7 @@ class OAuthConfig {
     required this.clientId,
     this.clientIdMetadataUrl,
     this.clientSecret,
+    this.resource,
     this.redirectUri,
     this.scopes = const [],
     this.grantType = OAuthGrantType.authorizationCode,
@@ -76,6 +81,7 @@ class OAuthConfig {
     'clientId': clientId,
     if (clientIdMetadataUrl != null) 'clientIdMetadataUrl': clientIdMetadataUrl,
     if (clientSecret != null) 'clientSecret': clientSecret,
+    if (resource != null) 'resource': resource,
     if (redirectUri != null) 'redirectUri': redirectUri,
     'scopes': scopes,
     'grantType': grantType.name,
@@ -89,6 +95,7 @@ class OAuthConfig {
     clientId: json['clientId'] as String,
     clientIdMetadataUrl: json['clientIdMetadataUrl'] as String?,
     clientSecret: json['clientSecret'] as String?,
+    resource: json['resource'] as String?,
     redirectUri: json['redirectUri'] as String?,
     scopes: (json['scopes'] as List<dynamic>?)?.cast<String>() ?? const [],
     grantType: OAuthGrantType.values.firstWhere(
@@ -183,10 +190,11 @@ class OAuthToken {
     return OAuthToken(
       accessToken: json['access_token'] as String,
       tokenType: json['token_type'] as String? ?? 'Bearer',
-      expiresIn: json['expires_in'] as int?,
+      expiresIn: (json['expires_in'] as num?)?.toInt(),
       refreshToken: json['refresh_token'] as String?,
-      scopes:
-          json['scope'] != null ? (json['scope'] as String).split(' ') : null,
+      scopes: json['scope'] is String
+          ? (json['scope'] as String).split(' ').where((s) => s.isNotEmpty).toList()
+          : null,
       issuedAt:
           json['issued_at'] != null
               ? DateTime.fromMillisecondsSinceEpoch(json['issued_at'] as int)
@@ -217,8 +225,18 @@ class AuthServerMetadata {
   /// Grant types supported
   final List<String> grantTypesSupported;
 
-  /// Code challenge methods supported
-  final List<String> codeChallengeMethodsSupported;
+  /// Code challenge methods supported. Null when the server does not say,
+  /// which means it does not support PKCE: a client must not proceed.
+  final List<String>? codeChallengeMethodsSupported;
+
+  /// Scopes the server knows.
+  final List<String>? scopesSupported;
+
+  /// The server puts `iss` in authorization responses (RFC 9207).
+  final bool authorizationResponseIssParameterSupported;
+
+  /// The server accepts Client ID Metadata Document URLs as `client_id`.
+  final bool clientIdMetadataDocumentSupported;
 
   /// Registration endpoint
   final String? registrationEndpoint;
@@ -236,7 +254,10 @@ class AuthServerMetadata {
     this.tokenEndpointAuthMethodsSupported = const ['client_secret_basic'],
     this.responseTypesSupported = const ['code'],
     this.grantTypesSupported = const ['authorization_code', 'refresh_token'],
-    this.codeChallengeMethodsSupported = const ['S256'],
+    this.codeChallengeMethodsSupported,
+    this.scopesSupported,
+    this.authorizationResponseIssParameterSupported = false,
+    this.clientIdMetadataDocumentSupported = false,
     this.registrationEndpoint,
     this.revocationEndpoint,
     this.introspectionEndpoint,
@@ -260,8 +281,11 @@ class AuthServerMetadata {
             const ['authorization_code', 'refresh_token'],
         codeChallengeMethodsSupported:
             (json['code_challenge_methods_supported'] as List<dynamic>?)
-                ?.cast<String>() ??
-            const ['S256'],
+                ?.cast<String>(),
+        scopesSupported: (json['scopes_supported'] as List<dynamic>?)?.cast<String>(),
+        authorizationResponseIssParameterSupported:
+            json['authorization_response_iss_parameter_supported'] == true,
+        clientIdMetadataDocumentSupported: json['client_id_metadata_document_supported'] == true,
         registrationEndpoint: json['registration_endpoint'] as String?,
         revocationEndpoint: json['revocation_endpoint'] as String?,
         introspectionEndpoint: json['introspection_endpoint'] as String?,

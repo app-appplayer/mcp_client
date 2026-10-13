@@ -4,16 +4,17 @@ library;
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:math';
 import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 
 import '../../logger.dart';
+import '../auth/mcp_oauth.dart';
 import '../auth/oauth.dart';
-import '../auth/oauth_client.dart';
 import '../auth/oauth_discovery.dart';
 import '../models/models.dart';
 import '../protocol/protocol.dart';
-import 'event_source.dart';
+import 'sse_parser.dart';
 import 'transport.dart';
 
 final Logger _logger = Logger('mcp_client.streamable_http_transport');
@@ -54,8 +55,10 @@ class StreamableHttpTransportConfig {
   /// Base URL for the MCP server
   final String baseUrl;
 
-  /// OAuth configuration (optional)
-  final OAuthConfig? oauthConfig;
+  /// MCP authorization (optional): its token goes on every request, and a
+  /// 401 / 403 challenge is answered through it before the request is
+  /// retried once.
+  final McpOAuth? oauth;
 
   /// Additional headers to send with requests.
   ///
@@ -88,7 +91,10 @@ class StreamableHttpTransportConfig {
   /// Maximum number of concurrent requests
   final int maxConcurrentRequests;
 
-  /// Whether to use HTTP/2 if available
+  /// No effect: the HTTP client used here speaks HTTP/1.1. Kept so 2.x
+  /// calls compile; pass an HTTP/2-capable `http.Client` as `httpClient`
+  /// to use HTTP/2.
+  @Deprecated('No effect: pass an HTTP/2-capable http.Client as httpClient')
   final bool useHttp2;
 
   /// Whether to terminate session on close
@@ -96,7 +102,7 @@ class StreamableHttpTransportConfig {
 
   const StreamableHttpTransportConfig({
     required this.baseUrl,
-    this.oauthConfig,
+    this.oauth,
     this.headers = const {},
     this.headersProvider,
     this.headersProviderTimeout = const Duration(seconds: 5),
@@ -109,28 +115,28 @@ class StreamableHttpTransportConfig {
 }
 
 /// Streamable HTTP client transport for MCP
-/// Operations whose target name is mirrored into `Mcp-Name` (2026-07-28).
+/// Operations whose target name is mirrored into `Mcp-Name` (2026-07-28;
+/// the tasks extension adds the task operations, named by `taskId`).
 const Set<String> _methodsRequiringName = {
   'tools/call',
   'resources/read',
   'prompts/get',
+  'tasks/get',
+  'tasks/update',
+  'tasks/cancel',
 };
 
 /// Encodes a header value using the spec's base64 sentinel when it cannot be
 /// carried as plain ASCII, or when it would otherwise be mistaken for one.
-String _encodeHeaderValue(String value) {
-  final needsEncoding = value.codeUnits.any((c) => c < 0x20 || c > 0x7e) ||
-      value.trim() != value ||
-      (value.startsWith('=?base64?') && value.endsWith('?='));
-  if (!needsEncoding) return value;
-  return '=?base64?${base64.encode(utf8.encode(value))}?=';
-}
+String _encodeHeaderValue(String value) => encodeMcpHeaderValue(value);
 
 class StreamableHttpClientTransport implements ClientTransport {
+  /// Message key (transport-internal, never sent): extra HTTP headers for
+  /// this message, such as `Mcp-Param-*` (2026-07-28).
+  static const String extraHeadersKey = '_headers';
+
   final StreamableHttpTransportConfig config;
   final http.Client _httpClient;
-  final HttpOAuthClient? _oauthClient;
-  final OAuthTokenManager? _tokenManager;
 
   final StreamController<dynamic> _messageController =
       StreamController.broadcast();
@@ -140,32 +146,59 @@ class StreamableHttpClientTransport implements ClientTransport {
   final Semaphore _requestSemaphore;
   String? _sessionId;
   String? _protocolVersion;
-  final Map<int, Completer<dynamic>> _pendingRequests = {};
-  EventSource? _eventSource;
-  StreamSubscription? _sseSubscription;
+  final Map<Object, Completer<dynamic>> _pendingRequests = {};
   bool _getStreamActive = false;
+
+  /// The POST carrying `notifications/initialized`, once sent.
+  Future<void>? _initializedSent;
+
+  /// Abort triggers of requests in flight, by JSON-RPC id.
+  final Map<Object, Completer<void>> _aborts = {};
+
+  /// Close the HTTP exchange of request [id] (2026-07-28: closing the
+  /// request's stream is how a client cancels it on Streamable HTTP).
+  void abortRequest(Object id) {
+    final abort = _aborts.remove(id);
+    if (abort != null && !abort.isCompleted) abort.complete();
+  }
+
+  /// How often a lost request stream is resumed before the request fails.
+  static const int _maxResumeAttempts = 5;
 
   StreamableHttpClientTransport._({
     required this.config,
     required http.Client httpClient,
-    HttpOAuthClient? oauthClient,
-    OAuthTokenManager? tokenManager,
   }) : _httpClient = httpClient,
-       _oauthClient = oauthClient,
-       _tokenManager = tokenManager,
        _requestSemaphore = Semaphore(config.maxConcurrentRequests);
 
   /// Spec 2025-06-18+: record the negotiated MCP protocol version so
   /// every post-handshake HTTP request carries
   /// `MCP-Protocol-Version: <version>`.
-  void setProtocolVersion(String version) {
+  void setProtocolVersion(String? version) {
     _protocolVersion = version;
+  }
+
+  /// [body] when it is a JSON-RPC error response to [requestId].
+  static Map<String, dynamic>? _jsonRpcErrorFor(String body, Object? requestId) {
+    if (requestId == null || body.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map &&
+          decoded['jsonrpc'] == '2.0' &&
+          decoded['error'] is Map &&
+          decoded['id'] == requestId) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } on FormatException {
+      return null;
+    }
+    return null;
   }
 
   /// Create a new Streamable HTTP transport
   static Future<StreamableHttpClientTransport> create({
     required String baseUrl,
-    OAuthConfig? oauthConfig,
+    McpOAuth? oauth,
     Map<String, String>? headers,
     RequestHeadersProvider? headersProvider,
     Duration? headersProviderTimeout,
@@ -177,7 +210,7 @@ class StreamableHttpClientTransport implements ClientTransport {
   }) async {
     final config = StreamableHttpTransportConfig(
       baseUrl: baseUrl,
-      oauthConfig: oauthConfig,
+      oauth: oauth,
       headers: headers ?? const {},
       headersProvider: headersProvider,
       headersProviderTimeout:
@@ -188,26 +221,11 @@ class StreamableHttpClientTransport implements ClientTransport {
       terminateOnClose: terminateOnClose,
     );
 
-    final client =
-        httpClient ??
-        (config.useHttp2
-            ? http.Client()
-            : // Use default client
-            http.Client());
-
-    HttpOAuthClient? oauthClient;
-    OAuthTokenManager? tokenManager;
-
-    if (oauthConfig != null) {
-      oauthClient = HttpOAuthClient(config: oauthConfig, httpClient: client);
-      tokenManager = OAuthTokenManager(oauthClient);
-    }
+    final client = httpClient ?? http.Client();
 
     return StreamableHttpClientTransport._(
       config: config,
       httpClient: client,
-      oauthClient: oauthClient,
-      tokenManager: tokenManager,
     );
   }
 
@@ -226,8 +244,8 @@ class StreamableHttpClientTransport implements ClientTransport {
   /// Check if HTTP/2 is enabled
   bool get useHttp2 => config.useHttp2;
 
-  /// Get the OAuth configuration
-  OAuthConfig? get oauthConfig => config.oauthConfig;
+  /// The authorization this transport uses, if any.
+  McpOAuth? get oauth => config.oauth;
 
   /// Get the current session ID
   String? get sessionId => _sessionId;
@@ -244,7 +262,18 @@ class StreamableHttpClientTransport implements ClientTransport {
       _startGetStream();
     }
 
-    _sendRequest(message).catchError((error) {
+    // Lifecycle: nothing may overtake `notifications/initialized`, and
+    // separate POSTs are not ordered — so later messages wait for it.
+    final Future<void> sent;
+    if (message is Map && message['method'] == 'notifications/initialized') {
+      sent = _initializedSent = _sendRequest(message);
+    } else {
+      final gate = _initializedSent;
+      sent = gate == null
+          ? _sendRequest(message)
+          : gate.catchError((Object _) {}).then((_) => _sendRequest(message));
+    }
+    sent.catchError((error) {
       // A long-lived stateless `subscriptions/listen` SSE POST can still be
       // unwinding when the transport is torn down (disconnect force-closes the
       // connection). Guard against reporting the resulting connection error onto
@@ -255,8 +284,10 @@ class StreamableHttpClientTransport implements ClientTransport {
     });
   }
 
-  /// Send HTTP request with proper authentication
-  Future<void> _sendRequest(dynamic message) async {
+  /// Send HTTP request with proper authentication. [authorized]: a 401 /
+  /// 403 has already been answered for this message (retry at most once).
+  Future<void> _sendRequest(dynamic message, {bool authorized = false}) async {
+    var retry = false;
     // Check if transport is closed before sending
     if (_isClosed) {
       _logger.debug('Transport closed, ignoring request');
@@ -303,7 +334,7 @@ class StreamableHttpClientTransport implements ClientTransport {
           headers['Mcp-Method'] = method;
           if (_methodsRequiringName.contains(method)) {
             final params = message['params'];
-            final target = params is Map ? (params['name'] ?? params['uri']) : null;
+            final target = params is Map ? (params['name'] ?? params['uri'] ?? params['taskId']) : null;
             if (target != null) {
               headers['Mcp-Name'] = _encodeHeaderValue('$target');
             }
@@ -311,49 +342,26 @@ class StreamableHttpClientTransport implements ClientTransport {
         }
       }
 
-      // Add OAuth token if available
-      if (_tokenManager != null) {
-        try {
-          final token = await _tokenManager.getAccessToken();
-          headers['Authorization'] = 'Bearer $token';
-        } on OAuthError catch (e) {
-          if (e.error == 'no_valid_token') {
-            // Send 401 to trigger OAuth flow.
-            //
-            // `-32001` here is a CLIENT-INTERNAL "authentication required"
-            // sentinel injected into the message stream so the OAuth layer
-            // engages — it is NOT the spec's resource-not-found code. In the
-            // makemind ecosystem resource-not-found is `-32001` on the server
-            // side too, but the semantics of THIS injected error are auth, not
-            // a resource lookup, and it originates from the client rather than
-            // a peer response. Renaming it to `-32002` would (a) collide with
-            // the server's `promptNotFound` / this client's
-            // `errorResourceAccessDenied` and (b) break existing OAuth-trigger
-            // consumers that key on this sentinel. Left as-is for all
-            // negotiated versions (A1). The 2026-07-28 resource-not-found move
-            // to `-32602` (INVALID_PARAMS) is a Part-B, version-gated concern.
-            _messageController.add({
-              'jsonrpc': '2.0',
-              'error': {
-                'code': -32001,
-                'message': 'Authentication required',
-                'data': {'oauth_error': e.toJson()},
-              },
-              if (message is Map && message['id'] != null) 'id': message['id'],
-            });
-            return;
-          }
-          rethrow;
+      // The token for this server, on every request; with none the server
+      // answers 401 and the challenge starts the authorization.
+      final token = await config.oauth?.accessToken(config.baseUrl);
+      if (token != null) headers['Authorization'] = 'Bearer $token';
+
+      if (message is Map && message.containsKey(extraHeadersKey)) {
+        final extra = message[extraHeadersKey];
+        message = Map<String, dynamic>.from(message)..remove(extraHeadersKey);
+        if (extra is Map) {
+          extra.forEach((k, v) => headers['$k'] = '$v');
         }
       }
-
       final body = jsonEncode(message);
       final uri = Uri.parse(config.baseUrl);
 
-      // Store request ID if this is a request
-      int? requestId;
-      if (message is Map && message['id'] != null) {
-        requestId = message['id'] as int;
+      // Store the id of a request (a response this client sends to a server
+      // request carries the server's id, of any type, and is not tracked).
+      Object? requestId;
+      if (message is Map && message['id'] != null && message['method'] != null) {
+        requestId = message['id'] as Object;
         _pendingRequests[requestId] = Completer<dynamic>();
       }
 
@@ -368,7 +376,8 @@ class StreamableHttpClientTransport implements ClientTransport {
       // request, but we can't see the request until the stream closes.
       // Streaming the response while it's open lets us dispatch each SSE
       // event the moment it arrives.
-      final request = http.Request('POST', uri)
+      final abort = requestId == null ? null : (_aborts[requestId] = Completer<void>());
+      final request = http.AbortableRequest('POST', uri, abortTrigger: abort?.future)
         ..body = body;
       headers.forEach((k, v) => request.headers[k] = v);
 
@@ -390,26 +399,41 @@ class StreamableHttpClientTransport implements ClientTransport {
         return;
       }
 
-      if (response.statusCode == 404) {
-        // Session terminated
+      if (response.statusCode == 404 && headers.containsKey('MCP-Session-Id')) {
+        // The session is gone: forget it, so the client starts a new one
+        // with `initialize` (Streamable HTTP, session management).
+        _sessionId = null;
+        _getStreamActive = false;
         if (requestId != null) {
           _messageController.add({
             'jsonrpc': '2.0',
             'id': requestId,
-            'error': {'code': 32600, 'message': 'Session terminated'},
+            'error': {'code': McpProtocol.errorSessionExpired, 'message': 'Session expired'},
           });
         }
         await response.stream.drain<void>();
         return;
       }
 
-      if (response.statusCode == 401) {
+      if ((response.statusCode == 401 || response.statusCode == 403) &&
+          config.oauth != null &&
+          !authorized) {
+        final challenge = response.headers['www-authenticate'];
+        await response.stream.drain<void>();
+        try {
+          retry = await config.oauth!.handleChallenge(
+              serverUrl: config.baseUrl, status: response.statusCode, wwwAuthenticate: challenge);
+        } on OAuthError catch (e) {
+          _logger.warning('Authorization failed: $e');
+          _authenticationRequired(requestId, response.statusCode, challenge, e);
+          return;
+        }
+        if (!retry) _authenticationRequired(requestId, response.statusCode, challenge, null);
+        return;
+      }
+
+      if (response.statusCode == 401 || response.statusCode == 403) {
         // Authentication required - trigger OAuth flow.
-        //
-        // `-32001` is the same client-internal auth sentinel as above (see
-        // the `no_valid_token` branch): an auth signal, not the spec's
-        // resource-not-found code. Left unchanged for all negotiated
-        // versions (A1).
         //
         // MCP 2025-11-25 (RFC 9728 / SEP-985 / SEP-835, A5/A6): parse the
         // server's `WWW-Authenticate` challenge so consumers receive
@@ -423,7 +447,7 @@ class StreamableHttpClientTransport implements ClientTransport {
         _messageController.add({
           'jsonrpc': '2.0',
           'error': {
-            'code': -32001,
+            'code': McpProtocol.errorAuthenticationRequired,
             'message': 'Authentication required',
             'data': {
               'www_authenticate': rawChallenge,
@@ -432,7 +456,7 @@ class StreamableHttpClientTransport implements ClientTransport {
               if (challenge != null && challenge.scopes.isNotEmpty)
                 'scope': challenge.scope,
               'resource_url': config.baseUrl,
-              'oauth_config_hint': config.oauthConfig?.toJson(),
+              'status': response.statusCode,
             },
           },
           if (requestId != null) 'id': requestId,
@@ -444,6 +468,14 @@ class StreamableHttpClientTransport implements ClientTransport {
       if (response.statusCode >= 400) {
         // Buffer the error body for the exception message.
         final errorBody = await response.stream.bytesToString();
+        // A JSON-RPC error answering this request (2026-07-28 sends
+        // UnsupportedProtocolVersion, HeaderMismatch … with 400) is the
+        // request's response, delivered like any other.
+        final rpcError = _jsonRpcErrorFor(errorBody, requestId);
+        if (rpcError != null) {
+          _messageController.add(rpcError);
+          return;
+        }
         throw McpError(
           'HTTP ${response.statusCode}: ${response.reasonPhrase}'
           '${errorBody.isEmpty ? '' : ' — $errorBody'}',
@@ -478,9 +510,38 @@ class StreamableHttpClientTransport implements ClientTransport {
           }
         }
       }
+    } on http.RequestAbortedException {
+      // The client cancelled the request by closing its exchange.
+      _logger.debug('Request aborted');
     } finally {
+      if (message is Map && message['id'] != null && message['method'] != null) {
+        _aborts.remove(message['id']);
+      }
       _requestSemaphore.release();
+      // Here, not after the try: its branches return early.
+      if (retry) await _sendRequest(message, authorized: true);
     }
+  }
+
+  /// Report that [requestId] cannot proceed without (more) authorization.
+  void _authenticationRequired(Object? requestId, int status, String? rawChallenge, OAuthError? error) {
+    final challenge = WwwAuthenticateChallenge.parse(rawChallenge);
+    _messageController.add({
+      'jsonrpc': '2.0',
+      if (requestId != null) 'id': requestId,
+      'error': {
+        'code': McpProtocol.errorAuthenticationRequired,
+        'message': status == 403 ? 'Insufficient scope' : 'Authentication required',
+        'data': {
+          'status': status,
+          'www_authenticate': rawChallenge,
+          if (challenge?.resourceMetadata != null) 'resource_metadata': challenge!.resourceMetadata,
+          if (challenge != null && challenge.scopes.isNotEmpty) 'scope': challenge.scope,
+          'resource_url': config.baseUrl,
+          if (error != null) 'oauth_error': error.toJson(),
+        },
+      },
+    });
   }
 
   /// Handle a streamed SSE response from a POST request, dispatching
@@ -491,102 +552,121 @@ class StreamableHttpClientTransport implements ClientTransport {
   /// the body would deadlock.
   Future<void> _handleStreamedSseResponse(
     http.StreamedResponse response,
-    int? requestId,
+    Object? requestId,
   ) async {
     _logger.debug('Handling streamed SSE response');
-    final lineStream = response.stream
-        .transform(utf8.decoder)
-        .transform(const LineSplitter());
-
-    await for (final line in lineStream) {
-      if (!line.startsWith('data:')) continue;
-      final data = line.substring(5).trim();
-      if (data.isEmpty || data == '[DONE]') continue;
-      try {
-        final decoded = jsonDecode(data);
-        _messageController.add(decoded);
-      } catch (e) {
-        _logger.debug('Failed to parse SSE data: $data');
-      }
+    var cursor = await _readSse(response.stream, requestId);
+    // A request stream that ends before its response is resumed with the
+    // last event id it carried (2025-03-26 .. 2025-11-25); 2026-07-28 has no
+    // resumption — the request is lost and the caller re-issues it.
+    final resumable = _protocolVersion == null || !McpProtocol.isStateless(_protocolVersion!);
+    var attempts = 0;
+    while (!cursor.delivered && requestId != null && !_isClosed && resumable) {
+      if (cursor.lastEventId == null || ++attempts > _maxResumeAttempts) break;
+      await Future<void>.delayed(cursor.retry ?? const Duration(seconds: 1));
+      final resumed = await _openGet(lastEventId: cursor.lastEventId);
+      if (resumed == null) break;
+      cursor = await _readSse(resumed.stream, requestId, from: cursor);
     }
+    final aborted = requestId != null && !_aborts.containsKey(requestId);
+    if (!cursor.delivered && requestId != null && !_isClosed && !aborted) {
+      _messageController.add({
+        'jsonrpc': '2.0',
+        'id': requestId,
+        'error': {
+          'code': McpProtocol.errorNetwork,
+          'message': 'The response stream ended before the response arrived',
+        },
+      });
+    }
+  }
+
+  /// Read one SSE stream, delivering its messages; reports whether the
+  /// response to [requestId] came, and the last event id and retry seen.
+  Future<_SseCursor> _readSse(Stream<List<int>> bytes, Object? requestId, {_SseCursor? from}) async {
+    var cursor = from ?? const _SseCursor();
+    try {
+      await for (final event in bytes
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .transform(const SseParser())) {
+        cursor = cursor.copyWith(lastEventId: event.id, retry: event.retry);
+        if (event.data.isEmpty) continue; // priming event
+        final Object? message;
+        try {
+          message = jsonDecode(event.data);
+        } on FormatException {
+          _logger.debug('Ignoring an SSE event that is not JSON');
+          continue;
+        }
+        if (message is Map &&
+            requestId != null &&
+            message['id'] == requestId &&
+            message['method'] == null) {
+          cursor = cursor.copyWith(delivered: true);
+        }
+        _messageController.add(message);
+      }
+    } catch (e) {
+      _logger.debug('SSE stream interrupted: $e');
+    }
+    return cursor;
+  }
+
+  /// GET on the MCP endpoint as an event stream (optionally resuming after
+  /// [lastEventId]); null when the server offers none or refuses.
+  Future<http.StreamedResponse?> _openGet({String? lastEventId}) async {
+    if (_isClosed || _sessionId == null) return null;
+    final request = http.Request('GET', Uri.parse(config.baseUrl));
+    final headers = <String, String>{
+      'Accept': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      ...await _providedHeaders('GET'),
+      ...config.headers,
+      'MCP-Session-Id': _sessionId!,
+      if (_protocolVersion != null) 'MCP-Protocol-Version': _protocolVersion!,
+      if (lastEventId != null) 'Last-Event-ID': lastEventId,
+    };
+    final token = await config.oauth?.accessToken(config.baseUrl);
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    headers.forEach((k, v) => request.headers[k] = v);
+    final response = await _httpClient.send(request);
+    if (response.statusCode == 200) return response;
+    await response.stream.drain<void>();
+    if (response.statusCode == 404) {
+      _sessionId = null;
+      _getStreamActive = false;
+    }
+    return null;
   }
 
   /// Start GET stream for server-initiated messages
   void _startGetStream() {
     if (_getStreamActive || _sessionId == null) return;
-
     _getStreamActive = true;
-    _logger.debug('Starting GET stream for session: $_sessionId');
-
-    _establishGetStream().catchError((error) {
-      _logger.error('GET stream error: $error');
+    unawaited(_runGetStream().catchError((Object error) {
+      _logger.debug('GET stream ended: $error');
       _getStreamActive = false;
-    });
+    }));
   }
 
-  /// Establish SSE GET stream
-  Future<void> _establishGetStream() async {
-    try {
-      final uri = Uri.parse(config.baseUrl);
-      
-      // Set up headers
-      final headers = <String, String>{
-        'Accept': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        ...await _providedHeaders('GET'),
-        ...config.headers,
-      };
-      
-      if (_sessionId != null) {
-        headers['MCP-Session-Id'] = _sessionId!;
-      }
-
-      // Add OAuth token if available
-      if (_tokenManager != null) {
-        try {
-          final token = await _tokenManager.getAccessToken();
-          headers['Authorization'] = 'Bearer $token';
-        } catch (e) {
-          _logger.debug('Failed to add OAuth token to GET stream: $e');
-        }
-      }
-
-      // Create EventSource instance
-      _eventSource = EventSource();
-      
-      // Connect to SSE endpoint
-      await _eventSource!.connect(
-        uri.toString(),
-        headers: headers,
-        onOpen: (_) {
-          _logger.debug('GET SSE connection established');
-        },
-        onMessage: (data) {
-          if (data is Map) {
-            _logger.debug('Received SSE message: $data');
-            _messageController.add(data);
-          } else if (data is String) {
-            try {
-              final message = jsonDecode(data);
-              _logger.debug('Received SSE message: $message');
-              _messageController.add(message);
-            } catch (e) {
-              _logger.debug('Failed to parse SSE message: $data');
-            }
-          }
-        },
-        onError: (error) {
-          _logger.error('GET stream error: $error');
-          _getStreamActive = false;
-        },
-      );
-    } catch (e) {
-      _logger.error('Failed to establish GET stream: $e');
-      _getStreamActive = false;
-      rethrow;
+  /// The session's GET stream: reconnected after the server closes it,
+  /// resuming from the last event id (waiting the `retry` it asked for).
+  /// Ends when the server offers no GET stream (405), the session ends, or
+  /// the transport closes.
+  Future<void> _runGetStream() async {
+    var cursor = const _SseCursor();
+    var failures = 0;
+    while (!_isClosed && _getStreamActive && _sessionId != null) {
+      final response = await _openGet(lastEventId: cursor.lastEventId);
+      if (response == null) break;
+      failures = 0;
+      cursor = await _readSse(response.stream, null, from: cursor);
+      if (_isClosed) break;
+      await Future<void>.delayed(cursor.retry ?? Duration(seconds: 1 << min(++failures, 5)));
     }
+    _getStreamActive = false;
   }
-
 
   @override
   void close() {
@@ -600,9 +680,8 @@ class StreamableHttpClientTransport implements ClientTransport {
       });
     }
 
-    // Close GET stream
-    _sseSubscription?.cancel();
-    _eventSource?.close();
+    // The GET stream loop stops on its own once the client is closed.
+    _getStreamActive = false;
 
     // Clear pending requests without completing them with error
     // to avoid unhandled exceptions during shutdown
@@ -610,8 +689,6 @@ class StreamableHttpClientTransport implements ClientTransport {
 
     _messageController.close();
     _httpClient.close();
-    _oauthClient?.close();
-    _tokenManager?.dispose();
 
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.complete();
@@ -685,37 +762,6 @@ class StreamableHttpClientTransport implements ClientTransport {
       _logger.warning('Session termination failed: $e');
     }
   }
-
-  /// Initiate OAuth authentication flow
-  Future<OAuthToken> authenticateWithOAuth({
-    required List<String> scopes,
-    String? state,
-  }) async {
-    if (_oauthClient == null) {
-      throw StateError('OAuth not configured for this transport');
-    }
-
-    final authUrl = await _oauthClient.getAuthorizationUrl(
-      scopes: scopes,
-      state: state,
-    );
-
-    // In a real implementation, you would:
-    // 1. Open the auth URL in a browser
-    // 2. Handle the redirect
-    // 3. Extract the authorization code
-    // 4. Exchange it for a token
-
-    throw UnimplementedError(
-      'OAuth flow requires platform-specific implementation. '
-      'Authorization URL: $authUrl',
-    );
-  }
-
-  /// Set OAuth token manually
-  void setOAuthToken(OAuthToken token) {
-    _tokenManager?.setToken(token);
-  }
 }
 
 /// Semaphore for controlling concurrent requests
@@ -745,4 +791,18 @@ class Semaphore {
       _currentCount++;
     }
   }
+}
+
+/// Where an SSE stream got to.
+class _SseCursor {
+  const _SseCursor({this.lastEventId, this.retry, this.delivered = false});
+  final String? lastEventId;
+  final Duration? retry;
+  final bool delivered;
+
+  _SseCursor copyWith({String? lastEventId, Duration? retry, bool? delivered}) => _SseCursor(
+        lastEventId: lastEventId ?? this.lastEventId,
+        retry: retry ?? this.retry,
+        delivered: delivered ?? this.delivered,
+      );
 }

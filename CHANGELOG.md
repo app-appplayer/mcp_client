@@ -1,3 +1,22 @@
+## 3.0.0
+
+**Breaking — see `MIGRATION-3.0.md`.**
+
+- Every MCP revision, 2024-11-05 through 2026-07-28 (stateless), plus the
+  2026-07-28 tasks extension.
+- Protocol types generated from the specification schemas, shared with
+  mcp_server and mcp_llm.
+- Authorization: OAuth 2.1 with discovery, PKCE and Client ID Metadata
+  Documents (`McpOAuth`).
+- Transports: stdio, HTTP+SSE and Streamable HTTP with resumption; one
+  configuration type for each.
+- Sampling, elicitation and roots answered for the capabilities the client
+  declares.
+- Tasks: `callToolAsTask`, `getTask`, `taskResult`, `cancelTask`.
+- `DelegatingClient`: extend it to wrap a client and override only what
+  changes. `connect(statelessMode:)` stays as a deprecated form of `era:`;
+  a class that implements `Client.connect` declares it too.
+
 ## 2.2.1
 
 ### Fixed

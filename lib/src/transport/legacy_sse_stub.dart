@@ -110,6 +110,7 @@ class HeartbeatStats {
 // ---------------------------------------------------------------------------
 
 /// OAuth-aware legacy SSE transport. Native platforms only.
+@Deprecated('Use SseClientTransport with an Authorization header (TransportConfig.sse(bearerToken:)); this transport\'s event parsing is not the standard one')
 class SseAuthClientTransport implements ClientTransport {
   SseAuthClientTransport._();
 
@@ -138,6 +139,7 @@ class SseAuthClientTransport implements ClientTransport {
 }
 
 /// Compression-negotiating legacy SSE transport. Native platforms only.
+@Deprecated('Use SseClientTransport: the HTTP client negotiates compression itself')
 class SseCompressedClientTransport implements ClientTransport {
   SseCompressedClientTransport._();
 
@@ -165,6 +167,7 @@ class SseCompressedClientTransport implements ClientTransport {
 }
 
 /// Heartbeat-monitoring legacy SSE transport. Native platforms only.
+@Deprecated('Use SseClientTransport and Client.startKeepAlive (TransportConfig.sse(heartbeatInterval:)); this transport waits for heartbeat events no MCP server sends')
 class SseHeartbeatClientTransport implements ClientTransport {
   SseHeartbeatClientTransport._();
 

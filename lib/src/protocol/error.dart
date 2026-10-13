@@ -6,73 +6,73 @@ import 'package:meta/meta.dart';
 
 /// JSON-RPC 2.0 and MCP 2025-03-26 standard error codes
 enum McpErrorCode {
-  // JSON-RPC 2.0 standard error codes
+  // JSON-RPC 2.0.
   parseError(-32700, "Parse error"),
   invalidRequest(-32600, "Invalid Request"),
   methodNotFound(-32601, "Method not found"),
   invalidParams(-32602, "Invalid params"),
   internalError(-32603, "Internal error"),
 
-  // JSON-RPC 2.0 reserved error code range
-  serverError(-32000, "Server error"),
+  // Assigned by the specification.
+  resourceNotFound(-32002, "Resource not found"),
+  urlElicitationRequired(-32042, "URL elicitation required"),
+  headerMismatch(-32020, "Header mismatch"),
+  missingRequiredClientCapability(-32021, "Missing required client capability"),
+  unsupportedProtocolVersion(-32022, "Unsupported protocol version"),
 
-  // MCP 2025-03-26 specific error codes
-  resourceNotFound(-32100, "Resource not found"),
-  toolNotFound(-32101, "Tool not found"),
-  promptNotFound(-32102, "Prompt not found"),
-  incompatibleVersion(-32103, "Incompatible protocol version"),
-  unauthorized(-32104, "Unauthorized"),
-  operationCancelled(-32105, "Operation cancelled"),
-  rateLimited(-32106, "Rate limited"),
+  // Implementation-defined, outside the JSON-RPC reserved range: the
+  // specification closes -32000..-32019 to new codes (2026-07-28) and tells
+  // receivers to assume no meaning there, so these live at -31000..-31019. Kinds that answer the same way
+  // share a code; [kindOf] keeps them apart in this package.
+  serverError(-31000, "Server error"),
+  toolNotFound(-32602, "Unknown tool"),
+  promptNotFound(-32602, "Unknown prompt"),
+  incompatibleVersion(-31004, "Incompatible protocol version"),
+  unauthorized(-31005, "Unauthorized"),
+  operationCancelled(-31006, "Operation cancelled"),
+  rateLimited(-31007, "Rate limited"),
+  timeoutError(-31008, "Timeout error"),
+  connectionLost(-31009, "Connection lost"),
+  protocolError(-31010, "Protocol error"),
+  toolExecutionError(-31011, "Tool execution error"),
+  resourceUnavailable(-31012, "Resource unavailable"),
+  validationError(-31013, "Validation error"),
+  quotaExceeded(-31014, "Quota exceeded"),
+  serverOverloaded(-31015, "Server overloaded"),
+  insufficientPermissions(-31016, "Insufficient permissions"),
+  authenticationRequired(-31017, "Authentication required"),
+  conflictError(-31018, "Conflict error"),
+  configurationError(-31019, "Server configuration error"),
 
-  // Additional MCP error codes
-  resourceUnavailable(-32107, "Resource unavailable"),
-  toolExecutionError(-32108, "Tool execution error"),
-  promptExecutionError(-32109, "Prompt execution error"),
-  sessionExpired(-32110, "Session expired"),
-  quotaExceeded(-32111, "Quota exceeded"),
-  validationError(-32112, "Validation error"),
-  conflictError(-32113, "Conflict error"),
-  dependencyError(-32114, "Dependency error"),
-  timeoutError(-32115, "Timeout error"),
-
-  // Authentication related errors
-  authenticationRequired(-32120, "Authentication required"),
-  authenticationFailed(-32121, "Authentication failed"),
-  insufficientPermissions(-32122, "Insufficient permissions"),
-  tokenExpired(-32123, "Token expired"),
-  tokenInvalid(-32124, "Token invalid"),
-
-  // Transport related errors
-  connectionLost(-32130, "Connection lost"),
-  connectionTimeout(-32131, "Connection timeout"),
-  protocolError(-32132, "Protocol error"),
-  encodingError(-32133, "Encoding error"),
-  compressionError(-32134, "Compression error"),
-
-  // Resource related errors
-  resourceLocked(-32140, "Resource locked"),
-  resourceCorrupted(-32141, "Resource corrupted"),
-  resourceTooLarge(-32142, "Resource too large"),
-  resourceAccessDenied(-32143, "Resource access denied"),
-
-  // Tool related errors
-  toolUnavailable(-32150, "Tool unavailable"),
-  toolTimeout(-32151, "Tool timeout"),
-  toolConfigurationError(-32152, "Tool configuration error"),
-  toolDependencyMissing(-32153, "Tool dependency missing"),
-
-  // General client errors
-  clientError(-32160, "Client error"),
-  networkError(-32161, "Network error"),
-  storageError(-32162, "Storage error"),
-  permissionDenied(-32163, "Permission denied");
+  // Further kinds, on the code of the kind they answer as.
+  promptExecutionError(-31011, "Prompt execution error"),
+  sessionExpired(-31017, "Session expired"),
+  dependencyError(-31019, "Dependency error"),
+  authenticationFailed(-31005, "Authentication failed"),
+  tokenExpired(-31017, "Token expired"),
+  tokenInvalid(-31005, "Token invalid"),
+  connectionTimeout(-31008, "Connection timeout"),
+  encodingError(-31010, "Encoding error"),
+  compressionError(-31010, "Compression error"),
+  resourceLocked(-31018, "Resource locked"),
+  resourceCorrupted(-31012, "Resource corrupted"),
+  resourceTooLarge(-31013, "Resource too large"),
+  resourceAccessDenied(-31016, "Resource access denied"),
+  toolUnavailable(-31012, "Tool unavailable"),
+  toolTimeout(-31008, "Tool timeout"),
+  toolConfigurationError(-31019, "Tool configuration error"),
+  toolDependencyMissing(-31019, "Tool dependency missing"),
+  maintenanceMode(-31015, "Server in maintenance mode"),
+  storageError(-31000, "Storage error"),
+  networkError(-31009, "Network error"),
+  clientError(-31000, "Client error"),
+  permissionDenied(-31016, "Permission denied");
 
   const McpErrorCode(this.code, this.message);
-
+  
   final int code;
   final String message;
-
+  
   /// Find enum by error code
   static McpErrorCode? fromCode(int code) {
     for (final errorCode in McpErrorCode.values) {
@@ -82,17 +82,63 @@ enum McpErrorCode {
     }
     return null;
   }
-
+  
   /// Check error codes by category
-  bool get isJsonRpcError => code >= -32768 && code <= -32000;
-  bool get isMcpError => code >= -32200 && code <= -32100;
-  bool get isAuthError => code >= -32124 && code <= -32120;
-  bool get isTransportError => code >= -32134 && code <= -32130;
-  bool get isResourceError => code >= -32143 && code <= -32140;
-  bool get isToolError => code >= -32153 && code <= -32150;
-  bool get isClientError => code >= -32163 && code <= -32160;
+  bool get isJsonRpcError => code >= -32768 && code <= -31000;
 
-  /// Check if error is retryable
+  /// A code the specification assigns (not implementation-defined).
+  bool get isMcpError => const {-32002, -32042, -32020, -32021, -32022}.contains(code);
+
+  bool get isAuthError => const {
+        McpErrorCode.unauthorized,
+        McpErrorCode.authenticationRequired,
+        McpErrorCode.authenticationFailed,
+        McpErrorCode.tokenExpired,
+        McpErrorCode.tokenInvalid,
+        McpErrorCode.insufficientPermissions,
+      }.contains(this);
+
+  bool get isTransportError => const {
+        McpErrorCode.connectionLost,
+        McpErrorCode.networkError,
+        McpErrorCode.connectionTimeout,
+        McpErrorCode.protocolError,
+        McpErrorCode.encodingError,
+        McpErrorCode.compressionError,
+      }.contains(this);
+
+  bool get isResourceError => const {
+        McpErrorCode.resourceNotFound,
+        McpErrorCode.resourceUnavailable,
+        McpErrorCode.resourceLocked,
+        McpErrorCode.resourceCorrupted,
+        McpErrorCode.resourceTooLarge,
+        McpErrorCode.resourceAccessDenied,
+      }.contains(this);
+
+  bool get isToolError => const {
+        McpErrorCode.toolNotFound,
+        McpErrorCode.toolExecutionError,
+        McpErrorCode.toolUnavailable,
+        McpErrorCode.toolTimeout,
+        McpErrorCode.toolConfigurationError,
+        McpErrorCode.toolDependencyMissing,
+      }.contains(this);
+
+  /// Raised on the client side (not a server answer).
+  bool get isClientError => const {
+        McpErrorCode.clientError,
+        McpErrorCode.permissionDenied,
+      }.contains(this);
+
+  bool get isServerError => const {
+        McpErrorCode.serverError,
+        McpErrorCode.serverOverloaded,
+        McpErrorCode.maintenanceMode,
+        McpErrorCode.configurationError,
+        McpErrorCode.storageError,
+      }.contains(this);
+
   bool get isRetryable {
     switch (this) {
       case McpErrorCode.rateLimited:

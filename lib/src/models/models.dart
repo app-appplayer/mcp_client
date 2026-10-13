@@ -1,1008 +1,158 @@
 import 'package:meta/meta.dart';
 
-/// Base content type enum for MCP
-enum MessageRole { user, assistant, system }
+import '../schema/schema.g.dart' as schema;
+import '../schema/schema.g.dart';
 
-enum MCPContentType { text, image, resource }
+// Protocol types: generated from the official MCP schema (every supported
+// revision). `ClientCapabilities` / `ServerCapabilities` stay this package's
+// own classes (boolean API, complete field set, the received JSON kept in
+// `raw`); the generated ones are reachable as `ClientCapabilitiesSchema` /
+// `ServerCapabilitiesSchema`.
+export '../schema/schema.g.dart' hide ClientCapabilities, ServerCapabilities;
 
-/// Log levels for MCP protocol
+/// The generated `ClientCapabilities` (wire form, every field).
+typedef ClientCapabilitiesSchema = schema.ClientCapabilities;
+
+/// The generated `ServerCapabilities` (wire form, every field).
+typedef ServerCapabilitiesSchema = schema.ServerCapabilities;
+
+/// Log levels, in the order the protocol ranks them.
 enum McpLogLevel {
-  debug, // 0
-  info, // 1
-  notice, // 2
-  warning, // 3
-  error, // 4
-  critical, // 5
-  alert, // 6
-  emergency, // 7
+  debug,
+  info,
+  notice,
+  warning,
+  error,
+  critical,
+  alert,
+  emergency;
+
+  /// The protocol value.
+  LoggingLevel get level => LoggingLevel.of(name);
 }
 
-/// Base class for all MCP content types (2025-03-26 compliant)
-@immutable
-abstract class Content {
-  const Content();
+// --- 2.x names -------------------------------------------------------------
 
-  Map<String, dynamic> toJson();
+/// 2.x name of [ContentBlock].
+@Deprecated('Use ContentBlock')
+typedef Content = ContentBlock;
 
-  factory Content.fromJson(Map<String, dynamic> json) {
-    final type = json['type'] as String;
-    return switch (type) {
-      'text' => TextContent.fromJson(json),
-      'image' => ImageContent.fromJson(json),
-      'audio' => AudioContent.fromJson(json),
-      'resource' => ResourceContent.fromJson(json),
-      'resource_link' => ResourceLinkContent.fromJson(json),
-      _ => throw ArgumentError('Unknown content type: $type'),
-    };
-  }
+/// 2.x name of [ResourceLink].
+@Deprecated('Use ResourceLink')
+typedef ResourceLinkContent = ResourceLink;
+
+/// 2.x name of [CompleteResult].
+@Deprecated('Use CompleteResult')
+typedef CompletionResult = CompleteResult;
+
+/// 2.x name of [Implementation] for a server.
+typedef ServerInfo = Implementation;
+
+/// 2.x name of [Implementation] for a client.
+typedef ClientInfo = Implementation;
+
+/// 2.x's `ResourceContentInfo`: resource contents with either [text] or
+/// [blob] (base64). A type as well as a constructor, so 2.x code that names
+/// it (`List<ResourceContentInfo>`) keeps compiling; the value is the
+/// [TextResourceContents] or [BlobResourceContents] itself.
+extension type ResourceContentInfo._(ResourceContents _contents) implements ResourceContents {
+  ResourceContentInfo({
+    required String uri,
+    String? mimeType,
+    String? text,
+    String? blob,
+    Map<String, Object?>? meta,
+  }) : _contents = blob != null
+            ? BlobResourceContents(uri: uri, mimeType: mimeType, blob: blob, meta: meta)
+            : text != null
+                ? TextResourceContents(uri: uri, mimeType: mimeType, text: text, meta: meta)
+                // Neither, as 2.x allowed: kept as given, so `text` stays null
+                // (not an invented empty string).
+                : ResourceContents.fromJson({
+                    'uri': uri,
+                    if (mimeType != null) 'mimeType': mimeType,
+                    if (meta != null) '_meta': meta,
+                  });
+
+  /// Any resource contents viewed under the 2.x name.
+  ResourceContentInfo.of(ResourceContents contents) : _contents = contents;
+
+  /// Reads resource contents JSON (text or blob).
+  ResourceContentInfo.fromJson(Map<String, dynamic> json)
+      : _contents = ResourceContents.fromJson(Map<String, Object?>.from(json));
 }
 
-/// Audio content (spec 2025-03-26+).
-@immutable
-class AudioContent extends Content {
-  final String data;
-  final String mimeType;
-  final Map<String, dynamic>? annotations;
+/// 2.x's `ResourceContent`: an embedded resource content block. A type as
+/// well as a constructor; the value is the [EmbeddedResource] itself, read
+/// through the 2.x members ([uri], [text], [blob], [mimeType] and
+/// [annotations] as a map).
+extension type ResourceContent._(EmbeddedResource _block) implements EmbeddedResource {
+  /// [annotations] is the 2.x map or an [Annotations].
+  ResourceContent({
+    required String uri,
+    String? mimeType,
+    String? text,
+    String? blob,
+    Object? annotations,
+    Map<String, Object?>? meta,
+  }) : _block = EmbeddedResource(
+          resource: ResourceContentInfo(uri: uri, mimeType: mimeType, text: text, blob: blob),
+          annotations: annotations is Map
+              ? Annotations.fromJson(Map<String, Object?>.from(annotations))
+              : annotations as Annotations?,
+          meta: meta,
+        );
 
-  const AudioContent({
-    required this.data,
-    required this.mimeType,
-    this.annotations,
-  });
+  /// Any embedded resource viewed under the 2.x name.
+  ResourceContent.of(EmbeddedResource block) : _block = block;
 
-  @override
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{
-      'type': 'audio',
-      'data': data,
-      'mimeType': mimeType,
-    };
-    if (annotations != null) json['annotations'] = annotations!;
-    return json;
-  }
+  /// Reads an embedded resource content block; the flat form 2.x also read
+  /// (`{"type": "resource", "uri": …, "text": …}`) is nested as the
+  /// specification has it.
+  ResourceContent.fromJson(Map<String, dynamic> json)
+      : _block = EmbeddedResource.fromJson(json['resource'] is Map
+            ? Map<String, Object?>.from(json)
+            : {
+                'type': 'resource',
+                'resource': {
+                  for (final k in const ['uri', 'mimeType', 'text', 'blob', '_meta'])
+                    if (json.containsKey(k)) k: json[k],
+                },
+                if (json.containsKey('annotations')) 'annotations': json['annotations'],
+              });
 
-  factory AudioContent.fromJson(Map<String, dynamic> json) {
-    return AudioContent(
-      data: json['data'] as String,
-      mimeType: json['mimeType'] as String,
-      annotations: json['annotations'] as Map<String, dynamic>?,
-    );
-  }
-}
+  /// The resource's URI.
+  String get uri => _block.resource.uri;
 
-/// Resource link content (spec 2025-06-18+).
-@immutable
-class ResourceLinkContent extends Content {
-  final String uri;
-  final String? name;
-  final String? description;
-  final String? mimeType;
-  final Map<String, dynamic>? annotations;
-  final Map<String, dynamic>? meta;
+  /// The resource's MIME type, when given.
+  String? get mimeType => _block.resource.mimeType;
 
-  const ResourceLinkContent({
-    required this.uri,
-    this.name,
-    this.description,
-    this.mimeType,
-    this.annotations,
-    this.meta,
-  });
+  /// The text, for text contents.
+  String? get text => _block.resource.text;
 
-  @override
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{
-      'type': 'resource_link',
-      'uri': uri,
-    };
-    if (name != null) json['name'] = name;
-    if (description != null) json['description'] = description;
-    if (mimeType != null) json['mimeType'] = mimeType;
-    if (annotations != null) json['annotations'] = annotations;
-    if (meta != null) json['_meta'] = meta;
-    return json;
-  }
+  /// The base64 data, for binary contents.
+  String? get blob => _block.resource.blob;
 
-  factory ResourceLinkContent.fromJson(Map<String, dynamic> json) {
-    return ResourceLinkContent(
-      uri: json['uri'] as String,
-      name: json['name'] as String?,
-      description: json['description'] as String?,
-      mimeType: json['mimeType'] as String?,
-      annotations: json['annotations'] as Map<String, dynamic>?,
-      meta: json['_meta'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Text content representation
-@immutable
-class TextContent extends Content {
-  final String text;
-  final Map<String, dynamic>? annotations;
-
-  const TextContent({required this.text, this.annotations});
-
-  @override
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{'type': 'text', 'text': text};
-    if (annotations != null) json['annotations'] = annotations!;
-    return json;
-  }
-
-  factory TextContent.fromJson(Map<String, dynamic> json) {
-    return TextContent(
-      text: json['text'] as String,
-      annotations: json['annotations'] as Map<String, dynamic>?,
-    );
+  /// The annotations as a map (2.x).
+  Map<String, dynamic>? get annotations {
+    final a = _block.annotations;
+    return a == null ? null : Map<String, dynamic>.from(a.toJson());
   }
 }
 
-/// Image content representation
-@immutable
-class ImageContent extends Content {
-  final String? url;
-  final String? data;
-  final String mimeType;
-  final Map<String, dynamic>? annotations;
-
-  const ImageContent({
-    this.url,
-    this.data,
-    required this.mimeType,
-    this.annotations,
-  });
-
-  factory ImageContent.fromBase64({
-    required String data,
-    required String mimeType,
-  }) {
-    return ImageContent(data: data, mimeType: mimeType);
-  }
-
-  factory ImageContent.fromJson(Map<String, dynamic> json) {
-    return ImageContent(
-      url: json['url'] as String?,
-      data: json['data'] as String?,
-      mimeType: json['mimeType'] as String,
-      annotations: json['annotations'] as Map<String, dynamic>?,
-    );
-  }
-
-  @override
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{'type': 'image', 'mimeType': mimeType};
-
-    // 2025 spec uses 'data' for base64, but maintain 'url' for compatibility
-    if (data != null) {
-      json['data'] = data!;
-    } else if (url != null) {
-      json['url'] = url!;
-    }
-
-    if (annotations != null) json['annotations'] = annotations!;
-    return json;
-  }
-}
-
-/// Resource content representation
-@immutable
-class ResourceContent extends Content {
-  final String uri;
-  final String? text;
-  final String? blob;
-  final String? mimeType;
-  final Map<String, dynamic>? annotations;
-
-  const ResourceContent({
-    required this.uri,
-    this.text,
-    this.blob,
-    this.mimeType,
-    this.annotations,
-  });
-
-  @override
-  Map<String, dynamic> toJson() {
-    final resource = <String, dynamic>{'uri': uri};
-    if (text != null) resource['text'] = text!;
-    if (blob != null) resource['blob'] = blob!;
-    if (mimeType != null) resource['mimeType'] = mimeType!;
-
-    final json = <String, dynamic>{'type': 'resource', 'resource': resource};
-    if (annotations != null) json['annotations'] = annotations!;
-    return json;
-  }
-
-  factory ResourceContent.fromJson(Map<String, dynamic> json) {
-    // Handle both 2025 format (nested) and older format (flat)
-    final resource = json['resource'] as Map<String, dynamic>?;
-    if (resource != null) {
-      // 2025 format with nested resource
-      return ResourceContent(
-        uri: resource['uri'] as String,
-        text: resource['text'] as String?,
-        blob: resource['blob'] as String?,
-        mimeType: resource['mimeType'] as String?,
-        annotations: json['annotations'] as Map<String, dynamic>?,
-      );
-    } else {
-      // Older flat format
-      return ResourceContent(
-        uri: json['uri'] as String,
-        text: json['text'] as String?,
-        blob: json['blob'] as String?,
-        mimeType: json['mimeType'] as String?,
-        annotations: json['annotations'] as Map<String, dynamic>?,
-      );
-    }
-  }
-}
-
-/// Tool definition. Spec 2025-06-18+ added `outputSchema`, `_meta`,
-/// and the `title` display name (separate from programmatic `name`).
-/// Spec 2025-11-25+ added `icons`.
-@immutable
-class Tool {
-  final String name;
-
-  /// Spec 2025-06-18+: human-readable display name; falls back to [name]
-  /// when null.
-  final String? title;
-  final String description;
-  final Map<String, dynamic> inputSchema;
-
-  /// Spec 2025-06-18+: optional JSON Schema describing the structured
-  /// result this tool produces.
-  final Map<String, dynamic>? outputSchema;
-
-  /// Spec 2025-11-25+: visual metadata (icon objects with `src`,
-  /// optional `sizes` and `mimeType`).
-  final List<Map<String, dynamic>>? icons;
-
-  /// Spec 2025-06-18+: free-form metadata.
-  final Map<String, dynamic>? meta;
-
-  final bool? supportsProgress;
-  final bool? supportsCancellation;
-  final Map<String, dynamic>? metadata;
-
-  const Tool({
-    required this.name,
-    this.title,
-    required this.description,
-    required this.inputSchema,
-    this.outputSchema,
-    this.icons,
-    this.meta,
-    this.supportsProgress,
-    this.supportsCancellation,
-    this.metadata,
-  });
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{
-      'name': name,
-      'description': description,
-      'inputSchema': inputSchema,
-    };
-    if (title != null) json['title'] = title;
-    if (outputSchema != null) json['outputSchema'] = outputSchema;
-    if (icons != null) json['icons'] = icons;
-    if (meta != null) json['_meta'] = meta;
-    if (supportsProgress == true) {
-      json['supportsProgress'] = supportsProgress;
-    }
-    if (supportsCancellation == true) {
-      json['supportsCancellation'] = supportsCancellation;
-    }
-    if (metadata != null) json['metadata'] = metadata!;
-    return json;
-  }
-
-  factory Tool.fromJson(Map<String, dynamic> json) {
-    return Tool(
-      name: json['name'] as String,
-      title: json['title'] as String?,
-      // `description` is OPTIONAL per the MCP spec (schema.ts
-      // `description?: string`) — a spec-conforming server may omit it. A
-      // non-null cast here made `tools/list` parsing throw `type 'Null' is
-      // not a subtype of type 'String'` against such servers; tolerate
-      // absence with an empty string (the field stays non-null).
-      description: json['description'] as String? ?? '',
-      inputSchema: json['inputSchema'] as Map<String, dynamic>,
-      outputSchema: json['outputSchema'] as Map<String, dynamic>?,
-      icons: (json['icons'] as List?)
-          ?.map((e) => Map<String, dynamic>.from(e as Map))
-          .toList(),
-      meta: json['_meta'] as Map<String, dynamic>?,
-      supportsProgress: json['supportsProgress'] as bool?,
-      supportsCancellation: json['supportsCancellation'] as bool?,
-      metadata: json['metadata'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Tool call result. Spec 2025-06-18 added `structuredContent`
-/// (paired with `Tool.outputSchema`).
-@immutable
-class CallToolResult {
-  final List<Content> content;
-  final Map<String, dynamic>? structuredContent;
-
-  /// Non-standard streaming hint. Honored nowhere: enable streaming via a
-  /// tool and deliver the data through a reactive resource (`subscriptions/
-  /// listen` on 2026-07-28, `resources/subscribe` on ≤2025-11-25). Retained +
-  /// still serialized for backward compatibility; slated for removal in the
-  /// next major (3.0).
-  @Deprecated(
-      'Non-standard hint, honored nowhere. Enable streaming via a tool and '
-      'deliver via a reactive resource (subscriptions/listen). Removed in 3.0.')
-  final bool isStreaming;
-  final bool? isError;
-
-  const CallToolResult(
-    this.content, {
-    this.structuredContent,
-    @Deprecated('See CallToolResult.isStreaming — removed in 3.0.')
-    this.isStreaming = false,
-    this.isError,
-  });
-
-  Map<String, dynamic> toJson() {
-    return {
-      'content': content.map((c) => c.toJson()).toList(),
-      if (structuredContent != null) 'structuredContent': structuredContent,
-      // ignore: deprecated_member_use_from_same_package
-      'isStreaming': isStreaming,
-      if (isError != null) 'isError': isError,
-    };
-  }
-
-  factory CallToolResult.fromJson(Map<String, dynamic> json) {
-    final List<dynamic> contentList = json['content'] as List<dynamic>? ?? [];
-    final List<Content> contents =
-        contentList.map((contentData) {
-          final contentMap = contentData as Map<String, dynamic>;
-          return Content.fromJson(contentMap);
-        }).toList();
-
-    return CallToolResult(
-      contents,
-      structuredContent: json['structuredContent'] as Map<String, dynamic>?,
-      // ignore: deprecated_member_use_from_same_package
-      isStreaming: json['isStreaming'] as bool? ?? false,
-      isError: json['isError'] as bool?,
-    );
-  }
-}
-
-/// Resource definition
-@immutable
-class Resource {
-  final String uri;
-  final String name;
-  /// Spec 2025-06-18+: human-readable display name. Falls back to [name].
-  final String? title;
-  final String description;
-  final String? mimeType;
-  /// Spec 2025-11-25+: visual metadata (icon objects).
-  final List<Map<String, dynamic>>? icons;
-  /// Spec 2025-06-18+: free-form `_meta` map.
-  final Map<String, dynamic>? meta;
-  final Map<String, dynamic>? metadata;
-
-  const Resource({
-    required this.uri,
-    required this.name,
-    this.title,
-    required this.description,
-    this.mimeType,
-    this.icons,
-    this.meta,
-    this.metadata,
-  });
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{
-      'uri': uri,
-      'name': name,
-      'description': description,
-    };
-    if (title != null) json['title'] = title;
-    if (mimeType != null) json['mimeType'] = mimeType;
-    if (icons != null) json['icons'] = icons;
-    if (meta != null) json['_meta'] = meta;
-    if (metadata != null) json['metadata'] = metadata!;
-    return json;
-  }
-
-  factory Resource.fromJson(Map<String, dynamic> json) {
-    return Resource(
-      uri: json['uri'] as String,
-      name: json['name'] as String,
-      title: json['title'] as String?,
-      // OPTIONAL per the MCP spec — see Tool.fromJson.
-      description: json['description'] as String? ?? '',
-      mimeType: json['mimeType'] as String?,
-      icons: (json['icons'] as List?)
-          ?.map((e) => Map<String, dynamic>.from(e as Map))
-          .toList(),
-      meta: json['_meta'] as Map<String, dynamic>?,
-      metadata: json['metadata'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Resource template definition
-@immutable
-class ResourceTemplate {
-  final String uriTemplate;
-  final String name;
-  final String description;
-  final String? mimeType;
-
-  /// Spec 2025-11-25+: visual metadata (icon objects). Previously dropped
-  /// on the client — resource templates now round-trip icons like tools,
-  /// resources, and prompts.
-  final List<Map<String, dynamic>>? icons;
-
-  const ResourceTemplate({
-    required this.uriTemplate,
-    required this.name,
-    required this.description,
-    this.mimeType,
-    this.icons,
-  });
-
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{
-      'uriTemplate': uriTemplate,
-      'name': name,
-      'description': description,
-    };
-    if (mimeType != null) {
-      result['mimeType'] = mimeType;
-    }
-    if (icons != null) {
-      result['icons'] = icons;
-    }
-    return result;
-  }
-
-  factory ResourceTemplate.fromJson(Map<String, dynamic> json) {
-    return ResourceTemplate(
-      uriTemplate: json['uriTemplate'] as String,
-      name: json['name'] as String,
-      // OPTIONAL per the MCP spec — see Tool.fromJson.
-      description: json['description'] as String? ?? '',
-      mimeType: json['mimeType'] as String?,
-      icons: (json['icons'] as List?)
-          ?.map((e) => Map<String, dynamic>.from(e as Map))
-          .toList(),
-    );
-  }
-}
-
-/// Resource content
-@immutable
-class ResourceContentInfo {
-  final String uri;
-  final String? mimeType;
-  final String? text;
-  final String? blob;
-
-  const ResourceContentInfo({
-    required this.uri,
-    this.mimeType,
-    this.text,
-    this.blob,
-  });
-
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{'uri': uri};
-    if (mimeType != null) result['mimeType'] = mimeType;
-    if (text != null) result['text'] = text;
-    if (blob != null) result['blob'] = blob;
-    return result;
-  }
-
-  factory ResourceContentInfo.fromJson(Map<String, dynamic> json) {
-    return ResourceContentInfo(
-      uri: json['uri'] as String,
-      mimeType: json['mimeType'] as String?,
-      text: json['text'] as String?,
-      blob: json['blob'] as String?,
-    );
-  }
-}
-
-/// Resource read result
-@immutable
-class ReadResourceResult {
-  final List<ResourceContentInfo> contents;
-
-  const ReadResourceResult({required this.contents});
-
-  Map<String, dynamic> toJson() {
-    return {'contents': contents.map((c) => c.toJson()).toList()};
-  }
-
-  factory ReadResourceResult.fromJson(Map<String, dynamic> json) {
-    final List<dynamic> contentsList = json['contents'] as List<dynamic>? ?? [];
-    final contents =
-        contentsList
-            .map(
-              (content) =>
-                  ResourceContentInfo.fromJson(content as Map<String, dynamic>),
-            )
-            .toList();
-
-    return ReadResourceResult(contents: contents);
-  }
-}
-
-/// Prompt argument definition
-@immutable
-class PromptArgument {
-  final String name;
-  final String? description;
-  final bool required;
-  final String? defaultValue;
-
-  const PromptArgument({
-    required this.name,
-    this.description,
-    this.required = false,
-    this.defaultValue,
-  });
-
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{'name': name, 'required': required};
-    if (description != null) {
-      result['description'] = description!;
-    }
-    if (defaultValue != null) {
-      result['default'] = defaultValue as Object;
-    }
-    return result;
-  }
-
-  factory PromptArgument.fromJson(Map<String, dynamic> json) {
-    return PromptArgument(
-      name: json['name'] as String,
-      description: json['description'] as String?,
-      required: json['required'] as bool? ?? false,
-      defaultValue: json['default'] as String?,
-    );
-  }
-}
-
-/// Prompt definition
-@immutable
-class Prompt {
-  final String name;
-  /// Spec 2025-06-18+: human-readable display name.
-  final String? title;
-  final String? description;
-  final List<PromptArgument> arguments;
-  /// Spec 2025-11-25+: visual metadata.
-  final List<Map<String, dynamic>>? icons;
-  /// Spec 2025-06-18+: `_meta` map.
-  final Map<String, dynamic>? meta;
-  final Map<String, dynamic>? metadata;
-
-  const Prompt({
-    required this.name,
-    this.title,
-    this.description,
-    required this.arguments,
-    this.icons,
-    this.meta,
-    this.metadata,
-  });
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{
-      'name': name,
-      'arguments': arguments.map((arg) => arg.toJson()).toList(),
-    };
-    if (title != null) json['title'] = title!;
-    if (description != null) json['description'] = description!;
-    if (icons != null) json['icons'] = icons!;
-    if (meta != null) json['_meta'] = meta!;
-    if (metadata != null) json['metadata'] = metadata!;
-    return json;
-  }
-
-  factory Prompt.fromJson(Map<String, dynamic> json) {
-    final List<dynamic> argsList = json['arguments'] as List<dynamic>? ?? [];
-    final arguments =
-        argsList
-            .map((arg) => PromptArgument.fromJson(arg as Map<String, dynamic>))
-            .toList();
-
-    return Prompt(
-      name: json['name'] as String,
-      title: json['title'] as String?,
-      description: json['description'] as String?,
-      arguments: arguments,
-      icons: (json['icons'] as List?)
-          ?.map((e) => Map<String, dynamic>.from(e as Map))
-          .toList(),
-      meta: json['_meta'] as Map<String, dynamic>?,
-      metadata: json['metadata'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Message model for prompt system
-@immutable
-class Message {
-  final String role;
-  final Content content;
-
-  const Message({required this.role, required this.content});
-
-  Map<String, dynamic> toJson() {
-    return {'role': role, 'content': content.toJson()};
-  }
-
-  factory Message.fromJson(Map<String, dynamic> json) {
-    final contentMap = json['content'] as Map<String, dynamic>;
-
-    return Message(
-      role: json['role'] as String,
-      content: Content.fromJson(contentMap),
-    );
-  }
-}
-
-/// Get prompt result
-@immutable
-class GetPromptResult {
-  final String? description;
-  final List<Message> messages;
-
-  const GetPromptResult({this.description, required this.messages});
-
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{
-      'messages': messages.map((m) => m.toJson()).toList(),
-    };
-    if (description != null) result['description'] = description!;
-    return result;
-  }
-
-  factory GetPromptResult.fromJson(Map<String, dynamic> json) {
-    final List<dynamic> messagesList = json['messages'] as List<dynamic>? ?? [];
-    final messages =
-        messagesList
-            .map((message) => Message.fromJson(message as Map<String, dynamic>))
-            .toList();
-
-    return GetPromptResult(
-      description: json['description'] as String?,
-      messages: messages,
-    );
-  }
-}
-
-/// Model hint for sampling
-@immutable
-class ModelHint {
-  final String name;
-  final double? weight;
-
-  const ModelHint({required this.name, this.weight});
-
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{'name': name};
-    if (weight != null) {
-      result['weight'] = weight;
-    }
-    return result;
-  }
-
-  factory ModelHint.fromJson(Map<String, dynamic> json) {
-    return ModelHint(
-      name: json['name'] as String,
-      weight:
-          json['weight'] != null ? (json['weight'] as num).toDouble() : null,
-    );
-  }
-}
-
-/// Model preferences for sampling
-@immutable
-class ModelPreferences {
-  final List<ModelHint>? hints;
-  final double? costPriority;
-  final double? speedPriority;
-  final double? intelligencePriority;
-
-  const ModelPreferences({
-    this.hints,
-    this.costPriority,
-    this.speedPriority,
-    this.intelligencePriority,
-  });
-
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{};
-    if (hints != null && hints!.isNotEmpty) {
-      result['hints'] = hints!.map((h) => h.toJson()).toList();
-    }
-    if (costPriority != null) {
-      result['costPriority'] = costPriority;
-    }
-    if (speedPriority != null) {
-      result['speedPriority'] = speedPriority;
-    }
-    if (intelligencePriority != null) {
-      result['intelligencePriority'] = intelligencePriority;
-    }
-    return result;
-  }
-
-  factory ModelPreferences.fromJson(Map<String, dynamic> json) {
-    final List<dynamic>? hintsList = json['hints'] as List<dynamic>?;
-    final hints =
-        hintsList
-            ?.map((hint) => ModelHint.fromJson(hint as Map<String, dynamic>))
-            .toList();
-
-    return ModelPreferences(
-      hints: hints,
-      costPriority:
-          json['costPriority'] != null
-              ? (json['costPriority'] as num).toDouble()
-              : null,
-      speedPriority:
-          json['speedPriority'] != null
-              ? (json['speedPriority'] as num).toDouble()
-              : null,
-      intelligencePriority:
-          json['intelligencePriority'] != null
-              ? (json['intelligencePriority'] as num).toDouble()
-              : null,
-    );
-  }
-}
-
-/// Create message request for sampling.
-///
-/// Spec 2025-11-25+ adds sampling tool calling: [tools] advertises tool
-/// definitions the sampled model may call, and [toolChoice] steers whether
-/// / which tool it must use. Both are gated by
-/// `McpProtocol.supportsSamplingTools(negotiatedVersion)`; older peers omit
-/// them and the fields serialize away (additive).
-@immutable
-class CreateMessageRequest {
-  final List<Message> messages;
-  final ModelPreferences? modelPreferences;
-  final String? systemPrompt;
-  final String? includeContext;
-  final int? maxTokens;
-  final double? temperature;
-  final List<String>? stopSequences;
-  final Map<String, dynamic>? metadata;
-
-  /// Spec 2025-11-25+: tool definitions offered to the sampled model. Reuses
-  /// the [Tool] schema (`name` / `description` / `inputSchema`), matching how
-  /// tools are modeled everywhere else in the protocol.
-  final List<Tool>? tools;
-
-  /// Spec 2025-11-25+: tool-selection directive. Carried losslessly — the
-  /// wire value is either a mode string (`"auto"` / `"none"` / `"required"`)
-  /// or an object naming a specific tool (e.g. `{"type":"tool","name":"…"}`).
-  /// Modeled as [Object] rather than a rigid enum so any peer-defined shape
-  /// round-trips without loss; use [SamplingToolChoice] helpers to build it.
-  final Object? toolChoice;
-
-  const CreateMessageRequest({
-    required this.messages,
-    this.modelPreferences,
-    this.systemPrompt,
-    this.includeContext,
-    this.maxTokens,
-    this.temperature,
-    this.stopSequences,
-    this.metadata,
-    this.tools,
-    this.toolChoice,
-  });
-
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{
-      'messages': messages.map((m) => m.toJson()).toList(),
-    };
-    if (modelPreferences != null) {
-      result['modelPreferences'] = modelPreferences!.toJson();
-    }
-    if (systemPrompt != null) {
-      result['systemPrompt'] = systemPrompt;
-    }
-    if (includeContext != null) {
-      result['includeContext'] = includeContext;
-    }
-    if (maxTokens != null) {
-      result['maxTokens'] = maxTokens;
-    }
-    if (temperature != null) {
-      result['temperature'] = temperature;
-    }
-    if (stopSequences != null && stopSequences!.isNotEmpty) {
-      result['stopSequences'] = stopSequences;
-    }
-    if (metadata != null && metadata!.isNotEmpty) {
-      result['metadata'] = Map<String, dynamic>.from(metadata!);
-    }
-    if (tools != null) {
-      result['tools'] = tools!.map((t) => t.toJson()).toList();
-    }
-    if (toolChoice != null) {
-      result['toolChoice'] = toolChoice;
-    }
-    return result;
-  }
-
-  factory CreateMessageRequest.fromJson(Map<String, dynamic> json) {
-    final List<dynamic> messagesList = json['messages'] as List<dynamic>? ?? [];
-    final messages =
-        messagesList
-            .map((message) => Message.fromJson(message as Map<String, dynamic>))
-            .toList();
-
-    final List<dynamic>? stopSequencesList =
-        json['stopSequences'] as List<dynamic>?;
-    final stopSequences =
-        stopSequencesList?.map((sequence) => sequence as String).toList();
-
-    final List<dynamic>? toolsList = json['tools'] as List<dynamic>?;
-    final tools = toolsList
-        ?.map((t) => Tool.fromJson(Map<String, dynamic>.from(t as Map)))
-        .toList();
-
-    return CreateMessageRequest(
-      messages: messages,
-      modelPreferences:
-          json['modelPreferences'] != null
-              ? ModelPreferences.fromJson(
-                json['modelPreferences'] as Map<String, dynamic>,
-              )
-              : null,
-      systemPrompt: json['systemPrompt'] as String?,
-      includeContext: json['includeContext'] as String?,
-      maxTokens: json['maxTokens'] as int?,
-      temperature:
-          json['temperature'] != null
-              ? (json['temperature'] as num).toDouble()
-              : null,
-      stopSequences: stopSequences,
-      metadata:
-          json['metadata'] != null
-              ? (json['metadata'] as Map<dynamic, dynamic>)
-                  .cast<String, dynamic>()
-              : null,
-      tools: tools,
-      toolChoice: json['toolChoice'],
-    );
-  }
-}
-
-/// Builders for the sampling [CreateMessageRequest.toolChoice] directive
-/// (spec 2025-11-25+). The wire value is intentionally kept loose (see the
-/// field doc) — these helpers produce the two canonical shapes without
-/// forcing callers to hand-write maps.
-class SamplingToolChoice {
-  const SamplingToolChoice._();
-
-  /// Let the model decide whether to call a tool.
-  static const String auto = 'auto';
-
-  /// Forbid tool calls for this turn.
-  static const String none = 'none';
-
-  /// Require the model to call some tool.
-  static const String required = 'required';
-
-  /// Require the model to call the named [toolName].
-  static Map<String, dynamic> tool(String toolName) => {
-        'type': 'tool',
-        'name': toolName,
-      };
-}
-
-/// Create message result from sampling.
-///
-/// Spec 2025-11-25+ adds sampling tool calling: when the model responds by
-/// invoking tools (rather than emitting a final message), the result carries
-/// the requested calls in [toolCalls] and typically reports a tool-use
-/// [stopReason]. [toolCalls] is carried losslessly (each entry is the raw
-/// tool-call object as sent by the peer) so the caller can dispatch the
-/// calls and continue the sampling loop; it is absent for plain completions,
-/// keeping older-revision results unchanged (additive).
-@immutable
-class CreateMessageResult {
-  final String model;
-  final String? stopReason;
-  final String role;
-  final Content content;
-
-  /// Spec 2025-11-25+: tool calls the model requested, when the sampling
-  /// turn resolved to tool use instead of a final message. Null when the
-  /// model returned a normal completion.
-  final List<Map<String, dynamic>>? toolCalls;
-
-  const CreateMessageResult({
-    required this.model,
-    this.stopReason,
-    required this.role,
-    required this.content,
-    this.toolCalls,
-  });
-
-  /// Whether this sampling turn resolved to tool calls (spec 2025-11-25+).
-  bool get hasToolCalls => toolCalls != null && toolCalls!.isNotEmpty;
-
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{
-      'model': model,
-      'role': role,
-      'content': content.toJson(),
-    };
-    if (stopReason != null) {
-      result['stopReason'] = stopReason;
-    }
-    if (toolCalls != null) {
-      result['toolCalls'] = toolCalls;
-    }
-    return result;
-  }
-
-  factory CreateMessageResult.fromJson(Map<String, dynamic> json) {
-    final contentMap = json['content'] as Map<String, dynamic>;
-
-    final List<dynamic>? toolCallsList = json['toolCalls'] as List<dynamic>?;
-    final toolCalls = toolCallsList
-        ?.map((c) => Map<String, dynamic>.from(c as Map))
-        .toList();
-
-    return CreateMessageResult(
-      model: json['model'] as String,
-      stopReason: json['stopReason'] as String?,
-      role: json['role'] as String,
-      content: Content.fromJson(contentMap),
-      toolCalls: toolCalls,
-    );
-  }
-}
-
-/// Root definition for filesystem access
-@immutable
-class Root {
-  final String uri;
-  final String name;
-  final String? description;
-
-  const Root({required this.uri, required this.name, this.description});
-
-  Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{'uri': uri, 'name': name};
-    if (description != null) {
-      result['description'] = description;
-    }
-    return result;
-  }
-
-  factory Root.fromJson(Map<String, dynamic> json) {
-    return Root(
-      uri: json['uri'] as String,
-      name: json['name'] as String,
-      description: json['description'] as String?,
-    );
-  }
+/// 2.x's `Message`: a prompt message. [role] is a [Role] or its value
+/// (`'user'`, `'assistant'`). A type as well as a constructor; the value is
+/// the [PromptMessage] itself.
+extension type Message._(PromptMessage _message) implements PromptMessage {
+  Message({required Object role, required ContentBlock content})
+      : _message = PromptMessage(role: role is Role ? role : Role.of('$role'), content: content);
+
+  /// Any prompt message viewed under the 2.x name.
+  Message.of(PromptMessage message) : _message = message;
+
+  /// Reads a prompt message.
+  Message.fromJson(Map<String, dynamic> json)
+      : _message = PromptMessage.fromJson(Map<String, Object?>.from(json));
 }
 
 /// Error class for MCP-related errors
@@ -1011,7 +161,10 @@ class McpError implements Exception {
   final String message;
   final int? code;
 
-  const McpError(this.message, {this.code});
+  /// The error's `data` member when it came from the server.
+  final Object? data;
+
+  const McpError(this.message, {this.code, this.data});
 
   @override
   String toString() => 'McpError ${code != null ? '($code)' : ''}: $message';
@@ -1297,679 +450,237 @@ class CachedResource {
 }
 
 /// Server information (2025-03-26 compliant)
-@immutable
-class ServerInfo {
-  final String name;
-  final String version;
-
-  /// Spec 2025-11-25+: human-readable description of the server
-  /// implementation (shared `Implementation.description` field).
-  final String? description;
-  final String? protocolVersion;
-  final Map<String, dynamic>? capabilities;
-  final Map<String, dynamic>? metadata;
-
-  const ServerInfo({
-    required this.name,
-    required this.version,
-    this.description,
-    this.protocolVersion,
-    this.capabilities,
-    this.metadata,
-  });
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{'name': name, 'version': version};
-    if (description != null) json['description'] = description!;
-    if (protocolVersion != null) json['protocolVersion'] = protocolVersion!;
-    if (capabilities != null) json['capabilities'] = capabilities!;
-    if (metadata != null) json['metadata'] = metadata!;
-    return json;
-  }
-
-  factory ServerInfo.fromJson(Map<String, dynamic> json) {
-    return ServerInfo(
-      name: json['name'] as String,
-      version: json['version'] as String,
-      description: json['description'] as String?,
-      protocolVersion: json['protocolVersion'] as String?,
-      capabilities: json['capabilities'] as Map<String, dynamic>?,
-      metadata: json['metadata'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Client information (2025-03-26 compliant).
+/// What this client supports, as it advertises it.
 ///
-/// Spec 2025-11-25+ adds [description] to the `Implementation` object
-/// (shared by `clientInfo` / `serverInfo`) — a human-readable summary of the
-/// implementation. Emitted only when set; older peers ignore the extra key
-/// (additive).
-@immutable
-class ClientInfo {
-  final String name;
-  final String version;
-
-  /// Spec 2025-11-25+: human-readable description of this implementation.
-  final String? description;
-  final Map<String, dynamic>? capabilities;
-  final Map<String, dynamic>? metadata;
-
-  const ClientInfo({
-    required this.name,
-    required this.version,
-    this.description,
-    this.capabilities,
-    this.metadata,
-  });
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{'name': name, 'version': version};
-    if (description != null) json['description'] = description!;
-    if (capabilities != null) json['capabilities'] = capabilities!;
-    if (metadata != null) json['metadata'] = metadata!;
-    return json;
-  }
-
-  factory ClientInfo.fromJson(Map<String, dynamic> json) {
-    return ClientInfo(
-      name: json['name'] as String,
-      version: json['version'] as String,
-      description: json['description'] as String?,
-      capabilities: json['capabilities'] as Map<String, dynamic>?,
-      metadata: json['metadata'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Client capabilities configuration
+/// Boolean flags for each capability plus every sub-field the protocol
+/// defines. [toJson] writes only what is set.
 @immutable
 class ClientCapabilities {
-  /// Root management support — server may request `roots/list` and the
-  /// client responds with [Client.roots].
-  final bool roots;
-
-  /// Whether roots list changes are sent as notifications
-  final bool rootsListChanged;
-
-  /// Sampling support — host's LLM is reachable through this client (the
-  /// server can ask for completions via `sampling/createMessage`).
-  final bool sampling;
-
-  /// Elicitation support — server can request user input via
-  /// `elicitation/create` (spec 2025-06-18+).
-  final bool elicitation;
-
-  /// Extensions framework (MCP 2026-07-28). Keys are reverse-DNS extension
-  /// identifiers (e.g. `io.modelcontextprotocol/tasks`); values are
-  /// per-extension settings (empty object = supported, no settings).
-  /// Additive — absent/empty for peers that do not use extensions.
-  final Map<String, Map<String, dynamic>>? extensions;
-
-  /// Create a capabilities object with specified settings
   const ClientCapabilities({
     this.roots = false,
     this.rootsListChanged = false,
     this.sampling = false,
+    this.samplingContext = false,
+    this.samplingTools = false,
     this.elicitation = false,
+    this.elicitationForm = false,
+    this.elicitationUrl = false,
+    this.tasks,
+    this.experimental,
     this.extensions,
+    this.raw,
   });
 
-  /// Whether this set advertises the extension [id] (reverse-DNS key).
+  /// `roots`: the server may call `roots/list`.
+  final bool roots;
+
+  /// `roots.listChanged`.
+  final bool rootsListChanged;
+
+  /// `sampling`: the server may call `sampling/createMessage`.
+  final bool sampling;
+
+  /// `sampling.context` (2025-11-25): context inclusion supported.
+  final bool samplingContext;
+
+  /// `sampling.tools` (2025-11-25): tool use in sampling supported.
+  final bool samplingTools;
+
+  /// `elicitation`: the server may call `elicitation/create`.
+  final bool elicitation;
+
+  /// `elicitation.form` (2025-11-25).
+  final bool elicitationForm;
+
+  /// `elicitation.url` (2025-11-25).
+  final bool elicitationUrl;
+
+  /// `tasks` (2025-11-25), as the protocol writes it.
+  final Map<String, dynamic>? tasks;
+
+  /// `experimental`: non-standard capabilities.
+  final Map<String, Map<String, dynamic>>? experimental;
+
+  /// `extensions` (2026-07-28): reverse-DNS id -> settings.
+  final Map<String, Map<String, dynamic>>? extensions;
+
+  /// The capabilities as received (every field, typed), when parsed. Its
+  /// sub-objects and any field this class does not name are written back by
+  /// [toJson].
+  final ClientCapabilitiesSchema? raw;
+
+  /// Whether this set advertises the extension [id].
   bool hasExtension(String id) => extensions?.containsKey(id) ?? false;
 
-  /// Convert capabilities to JSON
+  /// Whether sampling is declared (any sampling flag declares it).
+  bool get samplingDeclared => sampling || samplingContext || samplingTools;
+
+  /// Whether elicitation is declared (any elicitation flag declares it).
+  bool get elicitationDeclared => elicitation || elicitationForm || elicitationUrl;
+
+  /// Whether roots are declared.
+  bool get rootsDeclared => roots || rootsListChanged;
+
   Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{};
-
-    if (roots) {
-      result['roots'] = {'listChanged': rootsListChanged};
+    final received = raw?.toJson() ?? const <String, Object?>{};
+    // What was received under [capability].[sub], when it is declared.
+    Map<String, dynamic> part(String capability, String sub) {
+      final c = received[capability];
+      final v = c is Map ? c[sub] : null;
+      return v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
     }
 
-    if (sampling) {
-      result['sampling'] = {};
-    }
-
-    if (elicitation) {
-      result['elicitation'] = {};
-    }
-
-    if (extensions != null && extensions!.isNotEmpty) {
-      result['extensions'] = extensions;
-    }
-
-    return result;
+    const named = {'roots', 'sampling', 'elicitation', 'tasks', 'experimental', 'extensions'};
+    return {
+      for (final e in received.entries)
+        if (!named.contains(e.key)) e.key: e.value,
+      if (rootsDeclared) 'roots': {if (rootsListChanged) 'listChanged': true},
+      if (samplingDeclared)
+        'sampling': {
+          if (samplingContext) 'context': part('sampling', 'context'),
+          if (samplingTools) 'tools': part('sampling', 'tools'),
+        },
+      if (elicitationDeclared)
+        'elicitation': {
+          if (elicitationForm) 'form': part('elicitation', 'form'),
+          if (elicitationUrl) 'url': part('elicitation', 'url'),
+        },
+      if (tasks != null) 'tasks': tasks,
+      if (experimental != null && experimental!.isNotEmpty) 'experimental': experimental,
+      if (extensions != null && extensions!.isNotEmpty) 'extensions': extensions,
+    };
   }
 
   factory ClientCapabilities.fromJson(Map<String, dynamic> json) {
-    final rootsConfig = json['roots'] as Map<String, dynamic>?;
-    final samplingConfig = json['sampling'] as Map<String, dynamic>?;
-    final elicitationConfig = json['elicitation'] as Map<String, dynamic>?;
-    final extensionsConfig = json['extensions'] as Map?;
-
+    final c = schema.ClientCapabilities.fromJson(json);
     return ClientCapabilities(
-      roots: rootsConfig != null,
-      rootsListChanged: rootsConfig?['listChanged'] as bool? ?? false,
-      sampling: samplingConfig != null,
-      elicitation: elicitationConfig != null,
-      extensions: extensionsConfig?.map(
-        (k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map)),
-      ),
+      roots: c.roots != null,
+      rootsListChanged: c.roots?.listChanged ?? false,
+      sampling: c.sampling != null,
+      samplingContext: c.sampling?.context != null,
+      samplingTools: c.sampling?.tools != null,
+      elicitation: c.elicitation != null,
+      elicitationForm: c.elicitation?.form != null,
+      elicitationUrl: c.elicitation?.url != null,
+      tasks: c.has('tasks') ? Map<String, dynamic>.from(c['tasks'] as Map) : null,
+      experimental: c.experimental,
+      extensions: c.extensions,
+      raw: c,
     );
   }
 }
 
-/// Server capabilities
+/// What a server supports, as it advertised it.
+///
+/// Boolean flags for each capability and sub-field, plus [raw]: the JSON
+/// exactly as received, so a field this class does not name (a newer
+/// revision's, an extension's) is still there.
 @immutable
 class ServerCapabilities {
-  /// Tool support
-  final bool tools;
-
-  /// Whether tools list changes are sent as notifications
-  final bool toolsListChanged;
-
-  /// Resource support
-  final bool resources;
-
-  /// Whether resources list changes are sent as notifications
-  final bool resourcesListChanged;
-
-  /// Prompt support
-  final bool prompts;
-
-  /// Whether prompts list changes are sent as notifications
-  final bool promptsListChanged;
-
-  /// Logging support
-  final bool logging;
-
-  /// Sampling support
-  final bool sampling;
-
-  /// Extensions framework (MCP 2026-07-28). Reverse-DNS keyed extension
-  /// identifiers → per-extension settings, as advertised by the server via
-  /// `server/discover` / initialize. Additive.
-  final Map<String, Map<String, dynamic>>? extensions;
-
-  /// Create a capabilities object with specified settings
   const ServerCapabilities({
     this.tools = false,
     this.toolsListChanged = false,
     this.resources = false,
+    this.resourcesSubscribe = false,
     this.resourcesListChanged = false,
     this.prompts = false,
     this.promptsListChanged = false,
     this.logging = false,
-    this.sampling = false,
+    this.completions = false,
+    this.tasks,
+    this.experimental,
     this.extensions,
+    this.raw,
   });
 
-  /// Whether the server advertises the extension [id] (reverse-DNS key),
-  /// e.g. `io.modelcontextprotocol/tasks`.
+  final bool tools;
+  final bool toolsListChanged;
+  final bool resources;
+
+  /// `resources.subscribe`: `resources/subscribe` is supported.
+  final bool resourcesSubscribe;
+  final bool resourcesListChanged;
+  final bool prompts;
+  final bool promptsListChanged;
+  final bool logging;
+
+  /// `completions`: `completion/complete` is supported.
+  final bool completions;
+
+  /// `tasks` (2025-11-25), as the protocol writes it.
+  final Map<String, dynamic>? tasks;
+
+  /// `experimental`: non-standard capabilities.
+  final Map<String, Map<String, dynamic>>? experimental;
+
+  /// `extensions` (2026-07-28): reverse-DNS id -> settings.
+  final Map<String, Map<String, dynamic>>? extensions;
+
+  /// The capabilities as received (every field, typed), when parsed.
+  final ServerCapabilitiesSchema? raw;
+
+  /// Whether the server advertises the extension [id].
   bool hasExtension(String id) => extensions?.containsKey(id) ?? false;
 
-  /// Create capabilities from JSON
   factory ServerCapabilities.fromJson(Map<String, dynamic> json) {
-    final toolsConfig =
-        json['tools'] != null
-            ? Map<String, dynamic>.from(json['tools'] as Map)
-            : null;
-    final resourcesConfig =
-        json['resources'] != null
-            ? Map<String, dynamic>.from(json['resources'] as Map)
-            : null;
-    final promptsConfig =
-        json['prompts'] != null
-            ? Map<String, dynamic>.from(json['prompts'] as Map)
-            : null;
-    final loggingConfig =
-        json['logging'] != null
-            ? Map<String, dynamic>.from(json['logging'] as Map)
-            : null;
-    final samplingConfig =
-        json['sampling'] != null
-            ? Map<String, dynamic>.from(json['sampling'] as Map)
-            : null;
-    final extensionsConfig = json['extensions'] as Map?;
-
+    final c = schema.ServerCapabilities.fromJson(json);
     return ServerCapabilities(
-      tools: toolsConfig != null,
-      toolsListChanged: toolsConfig?['listChanged'] as bool? ?? false,
-      resources: resourcesConfig != null,
-      resourcesListChanged: resourcesConfig?['listChanged'] as bool? ?? false,
-      prompts: promptsConfig != null,
-      promptsListChanged: promptsConfig?['listChanged'] as bool? ?? false,
-      logging: loggingConfig != null,
-      sampling: samplingConfig != null,
-      extensions: extensionsConfig?.map(
-        (k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map)),
-      ),
+      tools: c.tools != null,
+      toolsListChanged: c.tools?.listChanged ?? false,
+      resources: c.resources != null,
+      resourcesSubscribe: c.resources?.subscribe ?? false,
+      resourcesListChanged: c.resources?.listChanged ?? false,
+      prompts: c.prompts != null,
+      promptsListChanged: c.prompts?.listChanged ?? false,
+      logging: c.logging != null,
+      completions: c.completions != null,
+      tasks: c.has('tasks') ? Map<String, dynamic>.from(c['tasks'] as Map) : null,
+      experimental: c.experimental,
+      extensions: c.extensions,
+      raw: c,
     );
   }
 
   Map<String, dynamic> toJson() {
-    final result = <String, dynamic>{};
-
-    if (tools) {
-      result['tools'] = {'listChanged': toolsListChanged};
-    }
-
-    if (resources) {
-      result['resources'] = {'listChanged': resourcesListChanged};
-    }
-
-    if (prompts) {
-      result['prompts'] = {'listChanged': promptsListChanged};
-    }
-
-    if (logging) {
-      result['logging'] = {};
-    }
-
-    if (sampling) {
-      result['sampling'] = {};
-    }
-
-    if (extensions != null && extensions!.isNotEmpty) {
-      result['extensions'] = extensions;
-    }
-
-    return result;
+    if (raw != null) return raw!.toJson();
+    return {
+      if (tools) 'tools': {if (toolsListChanged) 'listChanged': true},
+      if (resources)
+        'resources': {
+          if (resourcesSubscribe) 'subscribe': true,
+          if (resourcesListChanged) 'listChanged': true,
+        },
+      if (prompts) 'prompts': {if (promptsListChanged) 'listChanged': true},
+      if (logging) 'logging': <String, dynamic>{},
+      if (completions) 'completions': <String, dynamic>{},
+      if (tasks != null) 'tasks': tasks,
+      if (experimental != null && experimental!.isNotEmpty) 'experimental': experimental,
+      if (extensions != null && extensions!.isNotEmpty) 'extensions': extensions,
+    };
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ServerCapabilities &&
-          tools == other.tools &&
-          toolsListChanged == other.toolsListChanged &&
-          resources == other.resources &&
-          resourcesListChanged == other.resourcesListChanged &&
-          prompts == other.prompts &&
-          promptsListChanged == other.promptsListChanged &&
-          logging == other.logging &&
-          sampling == other.sampling;
+      other is ServerCapabilities && _eq(toJson(), other.toJson());
 
   @override
-  int get hashCode => Object.hash(
-    tools,
-    toolsListChanged,
-    resources,
-    resourcesListChanged,
-    prompts,
-    promptsListChanged,
-    logging,
-    sampling,
-  );
+  int get hashCode => toJson().toString().hashCode;
 
   @override
-  String toString() =>
-      'ServerCapabilities('
-      'tools: $tools, '
-      'toolsListChanged: $toolsListChanged, '
-      'resources: $resources, '
-      'resourcesListChanged: $resourcesListChanged, '
-      'prompts: $prompts, '
-      'promptsListChanged: $promptsListChanged, '
-      'logging: $logging, '
-      'sampling: $sampling)';
-}
-
-/// Initialize request
-@immutable
-class InitializeRequest {
-  final ClientInfo clientInfo;
-  final String protocolVersion;
-
-  const InitializeRequest({
-    required this.clientInfo,
-    required this.protocolVersion,
-  });
-
-  Map<String, dynamic> toJson() {
-    return {
-      'clientInfo': clientInfo.toJson(),
-      'protocolVersion': protocolVersion,
-    };
-  }
-
-  factory InitializeRequest.fromJson(Map<String, dynamic> json) {
-    return InitializeRequest(
-      clientInfo: ClientInfo.fromJson(
-        json['clientInfo'] as Map<String, dynamic>,
-      ),
-      protocolVersion: json['protocolVersion'] as String,
-    );
-  }
-}
-
-/// Initialize result
-@immutable
-class InitializeResult {
-  final ServerInfo serverInfo;
-  final String protocolVersion;
-  final Map<String, dynamic>? capabilities;
-
-  const InitializeResult({
-    required this.serverInfo,
-    required this.protocolVersion,
-    this.capabilities,
-  });
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{
-      'serverInfo': serverInfo.toJson(),
-      'protocolVersion': protocolVersion,
-    };
-    if (capabilities != null) json['capabilities'] = capabilities!;
-    return json;
-  }
-
-  factory InitializeResult.fromJson(Map<String, dynamic> json) {
-    return InitializeResult(
-      serverInfo: ServerInfo.fromJson(
-        json['serverInfo'] as Map<String, dynamic>,
-      ),
-      protocolVersion: json['protocolVersion'] as String,
-      capabilities: json['capabilities'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Tools list changed notification
-@immutable
-class ToolsListChangedNotification {
-  const ToolsListChangedNotification();
-
-  Map<String, dynamic> toJson() => {};
-
-  factory ToolsListChangedNotification.fromJson(Map<String, dynamic> json) {
-    return const ToolsListChangedNotification();
-  }
-}
-
-/// Resources list changed notification
-@immutable
-class ResourcesListChangedNotification {
-  const ResourcesListChangedNotification();
-
-  Map<String, dynamic> toJson() => {};
-
-  factory ResourcesListChangedNotification.fromJson(Map<String, dynamic> json) {
-    return const ResourcesListChangedNotification();
-  }
-}
-
-/// Prompts list changed notification
-@immutable
-class PromptsListChangedNotification {
-  const PromptsListChangedNotification();
-
-  Map<String, dynamic> toJson() => {};
-
-  factory PromptsListChangedNotification.fromJson(Map<String, dynamic> json) {
-    return const PromptsListChangedNotification();
-  }
-}
-
-/// Resource updated notification
-@immutable
-class ResourceUpdatedNotification {
-  final String uri;
-
-  const ResourceUpdatedNotification({required this.uri});
-
-  Map<String, dynamic> toJson() => {'uri': uri};
-
-  factory ResourceUpdatedNotification.fromJson(Map<String, dynamic> json) {
-    return ResourceUpdatedNotification(uri: json['uri'] as String);
-  }
-}
-
-/// List tools result
-@immutable
-class ListToolsResult {
-  final List<Tool> tools;
-
-  const ListToolsResult({required this.tools});
-
-  Map<String, dynamic> toJson() {
-    return {'tools': tools.map((t) => t.toJson()).toList()};
-  }
-
-  factory ListToolsResult.fromJson(Map<String, dynamic> json) {
-    final List<dynamic> toolsList = json['tools'] as List<dynamic>? ?? [];
-    final tools =
-        toolsList
-            .map((tool) => Tool.fromJson(tool as Map<String, dynamic>))
-            .toList();
-    return ListToolsResult(tools: tools);
-  }
-}
-
-/// List resources result
-@immutable
-class ListResourcesResult {
-  final List<Resource> resources;
-
-  const ListResourcesResult({required this.resources});
-
-  Map<String, dynamic> toJson() {
-    return {'resources': resources.map((r) => r.toJson()).toList()};
-  }
-
-  factory ListResourcesResult.fromJson(Map<String, dynamic> json) {
-    final List<dynamic> resourcesList =
-        json['resources'] as List<dynamic>? ?? [];
-    final resources =
-        resourcesList
-            .map(
-              (resource) => Resource.fromJson(resource as Map<String, dynamic>),
-            )
-            .toList();
-    return ListResourcesResult(resources: resources);
-  }
-}
-
-/// List prompts result
-@immutable
-class ListPromptsResult {
-  final List<Prompt> prompts;
-
-  const ListPromptsResult({required this.prompts});
-
-  Map<String, dynamic> toJson() {
-    return {'prompts': prompts.map((p) => p.toJson()).toList()};
-  }
-
-  factory ListPromptsResult.fromJson(Map<String, dynamic> json) {
-    final List<dynamic> promptsList = json['prompts'] as List<dynamic>? ?? [];
-    final prompts =
-        promptsList
-            .map((prompt) => Prompt.fromJson(prompt as Map<String, dynamic>))
-            .toList();
-    return ListPromptsResult(prompts: prompts);
-  }
-}
-
-/// Call tool request
-@immutable
-class CallToolRequest {
-  final String name;
-  final Map<String, dynamic>? arguments;
-
-  const CallToolRequest({required this.name, this.arguments});
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{'name': name};
-    if (arguments != null) json['arguments'] = arguments!;
-    return json;
-  }
-
-  factory CallToolRequest.fromJson(Map<String, dynamic> json) {
-    return CallToolRequest(
-      name: json['name'] as String,
-      arguments: json['arguments'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Read resource request
-@immutable
-class ReadResourceRequest {
-  final String uri;
-
-  const ReadResourceRequest({required this.uri});
-
-  Map<String, dynamic> toJson() => {'uri': uri};
-
-  factory ReadResourceRequest.fromJson(Map<String, dynamic> json) {
-    return ReadResourceRequest(uri: json['uri'] as String);
-  }
-}
-
-/// Get prompt request
-@immutable
-class GetPromptRequest {
-  final String name;
-  final Map<String, dynamic>? arguments;
-
-  const GetPromptRequest({required this.name, this.arguments});
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{'name': name};
-    if (arguments != null) json['arguments'] = arguments!;
-    return json;
-  }
-
-  factory GetPromptRequest.fromJson(Map<String, dynamic> json) {
-    return GetPromptRequest(
-      name: json['name'] as String,
-      arguments: json['arguments'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Completion request
-@immutable
-class CompletionRequest {
-  final Map<String, dynamic> ref;
-  final Map<String, dynamic>? argument;
-
-  const CompletionRequest({required this.ref, this.argument});
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{'ref': ref};
-    if (argument != null) json['argument'] = argument!;
-    return json;
-  }
-
-  factory CompletionRequest.fromJson(Map<String, dynamic> json) {
-    return CompletionRequest(
-      ref: json['ref'] as Map<String, dynamic>,
-      argument: json['argument'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Completion result
-@immutable
-class CompletionResult {
-  final Map<String, dynamic> completion;
-
-  const CompletionResult({required this.completion});
-
-  Map<String, dynamic> toJson() => {'completion': completion};
-
-  factory CompletionResult.fromJson(Map<String, dynamic> json) {
-    return CompletionResult(
-      completion: json['completion'] as Map<String, dynamic>,
-    );
-  }
-}
-
-/// Log message notification
-@immutable
-class LogMessageNotification {
-  final McpLogLevel level;
-  final String message;
-  final String? logger;
-  final Map<String, dynamic>? data;
-
-  const LogMessageNotification({
-    required this.level,
-    required this.message,
-    this.logger,
-    this.data,
-  });
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{'level': level.name, 'message': message};
-    if (logger != null) json['logger'] = logger!;
-    if (data != null) json['data'] = data!;
-    return json;
-  }
-
-  factory LogMessageNotification.fromJson(Map<String, dynamic> json) {
-    return LogMessageNotification(
-      level: McpLogLevel.values.firstWhere((e) => e.name == json['level']),
-      message: json['message'] as String,
-      logger: json['logger'] as String?,
-      data: json['data'] as Map<String, dynamic>?,
-    );
-  }
-}
-
-/// Cancel request notification
-@immutable
-class CancelRequestNotification {
-  final dynamic requestId;
-  final String? reason;
-
-  const CancelRequestNotification({required this.requestId, this.reason});
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{'requestId': requestId};
-    if (reason != null) json['reason'] = reason!;
-    return json;
-  }
-
-  factory CancelRequestNotification.fromJson(Map<String, dynamic> json) {
-    return CancelRequestNotification(
-      requestId: json['requestId'],
-      reason: json['reason'] as String?,
-    );
-  }
-}
-
-/// Progress notification
-@immutable
-class ProgressNotification {
-  final dynamic requestId;
-  final double progress;
-  final double? total;
-
-  const ProgressNotification({
-    required this.requestId,
-    required this.progress,
-    this.total,
-  });
-
-  Map<String, dynamic> toJson() {
-    final json = <String, dynamic>{
-      'requestId': requestId,
-      'progress': progress,
-    };
-    if (total != null) json['total'] = total!;
-    return json;
-  }
-
-  factory ProgressNotification.fromJson(Map<String, dynamic> json) {
-    return ProgressNotification(
-      requestId: json['requestId'],
-      progress: (json['progress'] as num).toDouble(),
-      total: json['total'] != null ? (json['total'] as num).toDouble() : null,
-    );
+  String toString() => 'ServerCapabilities(${toJson()})';
+
+  static bool _eq(Object? a, Object? b) {
+    if (a is Map && b is Map) {
+      return a.length == b.length && a.keys.every((k) => b.containsKey(k) && _eq(a[k], b[k]));
+    }
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!_eq(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    return a == b;
   }
 }
 
@@ -1992,7 +703,7 @@ class ToolMetadata {
   /// Create from Tool object
   factory ToolMetadata.fromTool(Tool tool) => ToolMetadata(
         name: tool.name,
-        description: tool.description,
+        description: tool.description ?? '',
       );
 
   /// Create from Map (for compatibility with McpClientManager.getTools())

@@ -24,20 +24,15 @@ void main() {
         );
       });
 
-      test('should support SSE with OAuth on web', () {
+      test('should support SSE with a bearer token on web', () {
         final transportConfig = TransportConfig.sse(
           serverUrl: 'https://api.example.com/sse',
-          oauthConfig: OAuthConfig(
-            authorizationEndpoint: 'https://auth.example.com/authorize',
-            tokenEndpoint: 'https://auth.example.com/token',
-            clientId: 'test-client-id',
-          ),
+          bearerToken: 'token',
         );
 
         expect(transportConfig, isA<SseTransportConfig>());
         final sseConfig = transportConfig as SseTransportConfig;
-        expect(sseConfig.oauthConfig, isNotNull);
-        expect(sseConfig.oauthConfig!.clientId, equals('test-client-id'));
+        expect(sseConfig.bearerToken, 'token');
       });
     });
 
@@ -62,11 +57,7 @@ void main() {
           timeout: const Duration(seconds: 60),
           maxConcurrentRequests: 20,
           useHttp2: true,
-          oauthConfig: OAuthConfig(
-            authorizationEndpoint: 'https://auth.example.com/authorize',
-            tokenEndpoint: 'https://auth.example.com/token',
-            clientId: 'test-client-id',
-          ),
+          oauth: McpOAuth(McpOAuthOptions(redirectUri: 'https://app.example.com/callback')),
           enableCompression: true,
           heartbeatInterval: const Duration(seconds: 60),
         );
@@ -76,7 +67,7 @@ void main() {
         expect(config.timeout, equals(const Duration(seconds: 60)));
         expect(config.maxConcurrentRequests, equals(20));
         expect(config.useHttp2, isTrue);
-        expect(config.oauthConfig, isNotNull);
+        expect(config.oauth, isNotNull);
         expect(config.enableCompression, isTrue);
         expect(config.heartbeatInterval, equals(const Duration(seconds: 60)));
       });

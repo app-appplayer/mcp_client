@@ -183,13 +183,46 @@ class McpProtocol {
   static const int errorInvalidParams = -32602;
   static const int errorInternal = -32603;
 
-  /// MCP-specific error codes
-  static const int errorResourceNotFound = -32001;
-  static const int errorResourceAccessDenied = -32002;
-  static const int errorToolNotFound = -32003;
-  static const int errorToolExecutionFailed = -32004;
-  static const int errorPromptNotFound = -32005;
-  static const int errorProtocolError = -32006;
+  /// Resource not found (2024-11-05 .. 2025-11-25). 2026-07-28 servers
+  /// answer an unknown resource with [errorInvalidParams]; clients accept
+  /// both ([isResourceNotFound]).
+  static const int errorResourceNotFound = -32002;
+
+  /// Unknown tool / invalid prompt name: Invalid params in every revision.
+  static const int errorToolNotFound = errorInvalidParams;
+  static const int errorPromptNotFound = errorInvalidParams;
+
+  /// Assigned by 2025-11-25 / 2026-07-28.
+  static const int errorUrlElicitationRequired = -32042;
+  static const int errorHeaderMismatch = -32020;
+  static const int errorMissingRequiredClientCapability = -32021;
+  static const int errorUnsupportedProtocolVersion = -32022;
+
+  /// Implementation-defined, outside the JSON-RPC reserved range
+  /// (-31000..-31019), shared with mcp_server.
+  static const int errorResourceAccessDenied = -31016;
+  static const int errorToolExecutionFailed = -31011;
+  static const int errorProtocolError = -31010;
+
+  /// Raised by this client's HTTP transport, not received from a server: the
+  /// server answered 401 or no access token is available, and the OAuth flow
+  /// should run. Outside the reserved range so it cannot be mistaken for a
+  /// server's answer.
+  static const int errorAuthenticationRequired = -31001;
+
+  /// Raised by this client's HTTP transport: the server answered 404 for the
+  /// session (it ended); the client starts a new one.
+  static const int errorSessionExpired = -31002;
+
+  /// Raised by this client's transport: the connection failed before the
+  /// response arrived.
+  static const int errorNetwork = -31009;
+
+  /// Whether [code] means "resource not found" from a server on [version]
+  /// (null = unknown): -32002 always, and -32602 from 2026-07-28 on.
+  static bool isResourceNotFound(int code, [String? version]) =>
+      code == errorResourceNotFound ||
+      (code == errorInvalidParams && (version == null || version.compareTo(v2026_07_28) >= 0));
 
   /// Check if a version is supported
   static bool isVersionSupported(String version) {

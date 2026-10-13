@@ -1,7 +1,6 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
-import 'dart:io' show Process, HttpClient, ContentType;
+import 'dart:io' show Process, ProcessSignal, HttpClient, ContentType;
 
 import '../../logger.dart';
 import '../models/models.dart';
@@ -18,8 +17,8 @@ class StdioClientTransport implements ClientTransport {
   final _closeCompleter = Completer<void>();
 
   // Message queue for synchronized sending
-  final _messageQueue = Queue<String>();
-  bool _isSending = false;
+  /// Set once [close] begins: nothing more is written to the server.
+  bool _stdinClosed = false;
 
   StdioClientTransport._internal(this._process) {
     _initialize();
@@ -86,6 +85,12 @@ class StdioClientTransport implements ClientTransport {
     // Store subscription for cleanup
     _processSubscriptions.add(stdoutSubscription);
 
+    // A write to a server that has exited fails later, on `done` (broken
+    // pipe); the exit itself is reported through onClose.
+    unawaited(_process.stdin.done.catchError((Object e) {
+      _logger.debug('Server stdin: $e');
+    }));
+
     // Log stderr output
     var stderrSubscription = _process.stderr
         .transform(utf8.decoder)
@@ -130,14 +135,29 @@ class StdioClientTransport implements ClientTransport {
       _messageController.close();
     }
 
-    // Ensure the process is terminated
-    try {
-      _process.kill();
-    } catch (e) {
-      // Process might already be terminated
-      _logger.debug('Error killing process: $e');
-    }
+    // Lifecycle, stdio shutdown: close the server's input, wait for it to
+    // exit, then SIGTERM, then SIGKILL.
+    unawaited(_shutdownProcess());
   }
+
+  /// How long the server gets after each shutdown step.
+  static const Duration shutdownGrace = Duration(seconds: 2);
+
+  Future<void> _shutdownProcess() async {
+    _stdinClosed = true;
+    try {
+      await _process.stdin.close();
+    } catch (e) {
+      _logger.debug('Error closing server stdin: $e');
+    }
+    if (await _exited(shutdownGrace)) return;
+    _process.kill(ProcessSignal.sigterm);
+    if (await _exited(shutdownGrace)) return;
+    _process.kill(ProcessSignal.sigkill);
+  }
+
+  Future<bool> _exited(Duration within) =>
+      _process.exitCode.then((_) => true).timeout(within, onTimeout: () => false);
 
   @override
   Stream<dynamic> get onMessage => _messageController.stream;
@@ -145,58 +165,22 @@ class StdioClientTransport implements ClientTransport {
   @override
   Future<void> get onClose => _closeCompleter.future;
 
-  // Add message to queue and process it
+  /// Writes [message] as one line. stdin buffers in order, and closing it
+  /// (on [close]) flushes what was sent, so a message sent just before
+  /// closing still reaches the server. After close nothing is written.
   @override
   void send(dynamic message) {
-    try {
-      final jsonMessage = jsonEncode(message);
-      _logger.debug('Queueing message: $jsonMessage');
-
-      // Add message to queue
-      _messageQueue.add(jsonMessage);
-
-      // Start processing queue if not already doing so
-      _processMessageQueue();
-    } catch (e) {
-      _logger.debug('Error encoding message: $e');
-      _logger.debug('Original message: $message');
-      rethrow;
-    }
-  }
-
-  // Process messages in queue one at a time
-  void _processMessageQueue() {
-    if (_isSending || _messageQueue.isEmpty) {
+    final jsonMessage = jsonEncode(message);
+    if (_stdinClosed) {
+      _logger.debug('Transport closed; not sending: $jsonMessage');
       return;
     }
-
-    _isSending = true;
-
-    // Process all messages in queue
-    _sendNextMessage();
-  }
-
-  void _sendNextMessage() {
-    if (_messageQueue.isEmpty) {
-      _isSending = false;
-      return;
-    }
-
-    final message = _messageQueue.removeFirst();
-
     try {
-      _logger.debug('Sending message: $message');
-      _process.stdin.writeln(message);
-
-      // Use Timer to give stdin a chance to process
-      Timer(Duration(milliseconds: 10), () {
-        _logger.debug('Message sent successfully');
-        _sendNextMessage();
-      });
-    } catch (e) {
-      _logger.debug('Error sending message: $e');
-      _isSending = false;
-      throw Exception('Failed to write to process stdin: $e');
+      _process.stdin.writeln(jsonMessage);
+    } on StateError catch (e) {
+      // The server's input closed under us (it exited): the connection is
+      // over, which onClose reports; there is nobody to send to.
+      _logger.debug('Server stdin closed; not sending: $e');
     }
   }
 

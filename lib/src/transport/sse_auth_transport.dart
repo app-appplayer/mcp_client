@@ -15,6 +15,7 @@ import 'event_source.dart';
 final Logger _logger = Logger('mcp_client.sse_auth_transport');
 
 /// SSE Transport with Bearer Token Authentication
+@Deprecated('Use SseClientTransport with an Authorization header (TransportConfig.sse(bearerToken:)); this transport\'s event parsing is not the standard one')
 class SseAuthClientTransport implements ClientTransport {
   final String serverUrl;
   final Map<String, String> _baseHeaders;

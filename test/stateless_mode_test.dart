@@ -1,6 +1,6 @@
 /// 2026-07-28 stateless core (SEP-2577) — client statelessMode.
 ///
-/// Verifies that a client connected with `statelessMode: true`:
+/// Verifies that a client connected with `era: ProtocolEra.modern`:
 ///  - skips the `initialize` handshake (no `initialize` request is sent),
 ///  - attaches the reverse-DNS `_meta` keys (protocol version + per-request
 ///    client capabilities + clientInfo) to EVERY request,
@@ -37,7 +37,7 @@ void main() {
         version: '9.9.9',
         capabilities: const ClientCapabilities(sampling: true),
       );
-      await client.connect(transport, statelessMode: true);
+      await client.connect(transport, era: ProtocolEra.modern);
 
       expect(client.isStateless, isTrue);
       expect(client.negotiatedProtocolVersion, McpProtocol.v2026_07_28);
@@ -82,14 +82,14 @@ void main() {
       });
 
       final client = Client(name: 'sc', version: '1.0.0');
-      await client.connect(transport, statelessMode: true);
+      await client.connect(transport, era: ProtocolEra.modern);
 
       final result = await client.discover();
       expect(result.supportedVersions, ['2026-07-28', '2025-11-25']);
       expect(result.capabilities.tools, isNotNull);
       expect(result.instructions, 'guidance');
       expect(result.ttlMs, 0);
-      expect(result.cacheScope, 'private');
+      expect(result.cacheScope, DiscoverResultCacheScope.private);
       expect(result.serverInfo, {'name': 'srv', 'version': '1.2.3'});
       // The discover call itself carried the stateless _meta.
       final discReq = transport.sentMessages
@@ -117,7 +117,7 @@ void main() {
       });
 
       final client = Client(name: 'legacy', version: '1.0.0');
-      await client.connect(transport); // statelessMode defaults to false
+      await client.connect(transport, era: ProtocolEra.legacy);
       expect(client.isStateless, isFalse);
 
       await client.listTools();

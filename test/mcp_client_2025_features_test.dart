@@ -107,19 +107,14 @@ void main() {
       });
 
       test('Streamable HTTP transport with OAuth', () async {
-        final oauthConfig = OAuthConfig(
-          authorizationEndpoint: 'https://auth.example.com/authorize',
-          tokenEndpoint: 'https://auth.example.com/token',
-          clientId: 'test-client',
-        );
+        final oauth = McpOAuth(McpOAuthOptions(redirectUri: 'http://localhost:8765/callback'));
 
         final transport = await StreamableHttpClientTransport.create(
           baseUrl: 'http://localhost:8080',
-          oauthConfig: oauthConfig,
+          oauth: oauth,
         );
 
-        expect(transport.oauthConfig, isNotNull);
-        expect(transport.oauthConfig!.clientId, equals('test-client'));
+        expect(transport.oauth, same(oauth));
       });
     });
 
@@ -164,16 +159,18 @@ void main() {
           },
         });
 
-        await client.connect(mockTransport);
+        await client.connect(mockTransport, era: ProtocolEra.legacy);
         final tools = await client.listTools();
 
         expect(tools.length, equals(1));
         final tool = tools[0];
-        expect(tool.supportsProgress, isTrue);
-        expect(tool.supportsCancellation, isTrue);
-        expect(tool.metadata?['category'], equals('data_processing'));
-        expect(tool.metadata?['priority'], equals('high'));
-        expect(tool.metadata?['estimatedDuration'], equals(300));
+        // Keys outside the schema are kept intact in `extra`.
+        expect(tool.extra['supportsProgress'], isTrue);
+        expect(tool.extra['supportsCancellation'], isTrue);
+        final metadata = tool.extra['metadata'] as Map;
+        expect(metadata['category'], equals('data_processing'));
+        expect(metadata['priority'], equals('high'));
+        expect(metadata['estimatedDuration'], equals(300));
       });
 
       test('Progress tracking with operation ID', () async {
@@ -200,7 +197,7 @@ void main() {
           },
         });
 
-        await client.connect(mockTransport);
+        await client.connect(mockTransport, era: ProtocolEra.legacy);
         final tracking = await client.callToolWithTracking('progress_tool', {
           'data': 'test',
         }, trackProgress: true);
@@ -243,7 +240,7 @@ void main() {
           },
         });
 
-        await client.connect(mockTransport);
+        await client.connect(mockTransport, era: ProtocolEra.legacy);
         final templates = await client.listResourceTemplates();
 
         expect(templates.length, equals(2));
@@ -299,7 +296,7 @@ void main() {
           },
         });
 
-        await client.connect(mockTransport);
+        await client.connect(mockTransport, era: ProtocolEra.legacy);
         final result = await client.getResourceWithTemplate('file:///{path}', {
           'path': 'test/document.txt',
         });
@@ -322,7 +319,7 @@ void main() {
           },
         });
 
-        await client.connect(mockTransport);
+        await client.connect(mockTransport, era: ProtocolEra.legacy);
         expect(client.isConnected, isTrue);
 
         client.disconnect();
@@ -363,7 +360,8 @@ void main() {
         Exception? lastError;
         try {
           await client.connectWithRetry(
-            retryTransport,
+            () async => retryTransport,
+            era: ProtocolEra.legacy,
             maxRetries: 2, // Only 2 retries, so it should fail
             delay: const Duration(milliseconds: 10),
           );
@@ -401,7 +399,8 @@ void main() {
         });
 
         await successClient.connectWithRetry(
-          successTransport,
+          () async => successTransport,
+          era: ProtocolEra.legacy,
           maxRetries: 3,
           delay: const Duration(milliseconds: 10),
         );
@@ -444,12 +443,8 @@ void main() {
       test('Sealed class pattern for connection states', () {
         const disconnected = Disconnected();
         const connecting = Connecting();
-        const serverInfo = ServerInfo(
-          name: 'Test Server',
-          version: '1.0.0',
-          protocolVersion: '2025-03-26',
-        );
-        const connected = Connected(serverInfo);
+        final serverInfo = ServerInfo(name: 'Test Server', version: '1.0.0');
+        final connected = Connected(serverInfo);
         const disconnecting = Disconnecting();
         const error = ConnectionError(McpError('Connection failed'), null);
 
@@ -475,24 +470,19 @@ void main() {
         expect(getStateMessage(error), equals('Error: Connection failed'));
       });
 
-      test('Immutable models with const constructors', () {
-        const content1 = TextContent(
-          text: 'Hello',
-          annotations: {'lang': 'en'},
-        );
-        const content2 = TextContent(
-          text: 'Hello',
-          annotations: {'lang': 'en'},
-        );
+      test('models compare by value and do not change after construction', () {
+        final source = {'type': 'text', 'text': 'Hello'};
+        final content1 = TextContent.fromJson(source);
+        final content2 = TextContent(text: 'Hello');
+        expect(content1, equals(content2));
+        expect(content1.hashCode, content2.hashCode);
 
-        // Const objects are identical
-        expect(identical(content1, content2), isTrue);
-
-        // Verify immutability through JSON round-trip
-        final json = content1.toJson();
-        final decoded = TextContent.fromJson(json);
-        expect(decoded.text, equals(content1.text));
-        expect(decoded.annotations, equals(content1.annotations));
+        // Changing the map it was built from does not reach the model.
+        source['text'] = 'changed';
+        expect(content1.text, 'Hello');
+        // Nor does changing the map it hands out.
+        content1.toJson()['text'] = 'changed';
+        expect(content1.text, 'Hello');
       });
     });
 
@@ -515,7 +505,7 @@ void main() {
 
         mockTransport.queueResponse({'jsonrpc': '2.0', 'id': 2, 'result': {}});
 
-        await client.connect(mockTransport);
+        await client.connect(mockTransport, era: ProtocolEra.legacy);
         await client.setLoggingLevel(McpLogLevel.debug);
 
         final setLevelMessage = mockTransport.sentMessages[2];

@@ -33,24 +33,24 @@ void main() {
         },
         'requestState': 'opaque-blob',
       });
-      expect(result.inputRequests.keys, contains('req-1'));
-      expect(result.inputRequests['req-1']!['method'],
-          'sampling/createMessage');
+      expect(result.inputRequests!.keys, contains('req-1'));
+      expect(result.inputRequests!['req-1'], isA<CreateMessageRequest>());
       expect(result.requestState, 'opaque-blob');
     });
 
     test('tolerates malformed / absent inputRequests', () {
       final result = InputRequiredResult.fromJson(const {});
-      expect(result.inputRequests, isEmpty);
+      expect(result.inputRequests, isNull);
       expect(result.requestState, isNull);
     });
 
-    test('skips non-Map entries in inputRequests', () {
+    test('a malformed entry is reported and kept, not dropped', () {
       final result = InputRequiredResult.fromJson({
+        'resultType': 'input_required',
         'inputRequests': {'req-1': 'not-a-map', 'req-2': {'method': 'x'}},
       });
-      expect(result.inputRequests.containsKey('req-1'), isFalse);
-      expect(result.inputRequests.containsKey('req-2'), isTrue);
+      expect(result.check(), isNotEmpty);
+      expect((result.toJson()['inputRequests'] as Map).keys, ['req-1', 'req-2']);
     });
   });
 
@@ -68,18 +68,18 @@ void main() {
       expect(filter.resourceSubscriptions, ['file:///a', 'file:///b']);
     });
 
-    test('fromJson defaults to empty subscriptions when absent/non-list', () {
+    test('absent fields read as absent; a wrong type is reported', () {
       final filter = SubscriptionFilter.fromJson(const {});
-      expect(filter.toolsListChanged, isFalse);
-      expect(filter.resourceSubscriptions, isEmpty);
+      expect(filter.toolsListChanged, isNull);
+      expect(filter.resourceSubscriptions, isNull);
 
       final filter2 =
           SubscriptionFilter.fromJson({'resourceSubscriptions': 'not-a-list'});
-      expect(filter2.resourceSubscriptions, isEmpty);
+      expect(filter2.check(), isNotEmpty);
     });
 
     test('toJson emits only truthy/non-empty fields', () {
-      const filter = SubscriptionFilter(
+      final filter = SubscriptionFilter(
         toolsListChanged: true,
         resourceSubscriptions: ['file:///a'],
       );
@@ -91,7 +91,7 @@ void main() {
     });
 
     test('toJson is empty for an all-default filter', () {
-      const filter = SubscriptionFilter();
+      final filter = SubscriptionFilter();
       expect(filter.toJson(), <String, dynamic>{});
     });
   });
@@ -103,7 +103,7 @@ void main() {
       final subscription = Subscription(
         subscriptionId: 7,
         acknowledged: Future.value(
-          const SubscriptionFilter(toolsListChanged: true),
+          SubscriptionFilter(toolsListChanged: true),
         ),
         notifications: controller.stream,
         cancel: () => cancelled = true,

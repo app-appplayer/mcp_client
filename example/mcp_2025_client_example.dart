@@ -93,21 +93,16 @@ Future<void> _demonstrateStreamableHttpTransport() async {
 
   try {
     // Create HTTP transport with OAuth
-    final oauthConfig = OAuthConfig(
-      authorizationEndpoint: 'https://auth.example.com/oauth2/authorize',
-      tokenEndpoint: 'https://auth.example.com/oauth2/token',
-      clientId: 'mcp-client',
-    );
+    final oauth = McpOAuth(McpOAuthOptions(redirectUri: 'http://localhost:8765/callback'));
 
     final transport = await StreamableHttpClientTransport.create(
       baseUrl: 'http://localhost:8080',
-      oauthConfig: oauthConfig,
+      oauth: oauth,
       headers: {
         'User-Agent': 'MCP-Client-2025/1.0',
         'X-Client-Version': '2025-03-26',
       },
       maxConcurrentRequests: 5,
-      useHttp2: true,
     );
 
     print('✅ HTTP transport created');

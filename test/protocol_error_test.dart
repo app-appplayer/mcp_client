@@ -20,7 +20,7 @@ void main() {
   group('McpErrorCode.fromCode', () {
     test('resolves a known code to its enum value', () {
       expect(McpErrorCode.fromCode(-32700), McpErrorCode.parseError);
-      expect(McpErrorCode.fromCode(-32101), McpErrorCode.toolNotFound);
+      expect(McpErrorCode.fromCode(-32002), McpErrorCode.resourceNotFound);
     });
 
     test('returns null for an unknown code', () {
@@ -157,14 +157,14 @@ void main() {
     test('McpError.fromJsonRpc parses a JSON-RPC error response', () {
       final error = McpError.fromJsonRpc({
         'error': {
-          'code': -32101,
-          'message': 'Tool not found: t1',
+          'code': -32002,
+          'message': 'Resource not found: t1',
           'data': {'tool': 't1'},
         },
         'id': 3,
       });
-      expect(error.code, McpErrorCode.toolNotFound);
-      expect(error.message, 'Tool not found: t1');
+      expect(error.code, McpErrorCode.resourceNotFound);
+      expect(error.message, 'Resource not found: t1');
       expect(error.data, {'tool': 't1'});
       expect(error.requestId, 3);
     });

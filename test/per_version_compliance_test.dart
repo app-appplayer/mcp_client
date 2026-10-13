@@ -1,3 +1,4 @@
+import 'dart:async';
 // Per-version protocol compliance matrix for mcp_client.
 //
 // Pairs with the mcp_server matrix. Verifies the protocol registry,
@@ -79,7 +80,11 @@ void main() {
     late MockTransport transport;
 
     setUp(() {
-      client = Client(name: 'test-client', version: '1.0.0');
+      client = Client(
+        name: 'test-client',
+        version: '1.0.0',
+        capabilities: const ClientCapabilities(roots: true, sampling: true, elicitation: true),
+      );
       transport = MockTransport();
       transport.queueResponse({
         'jsonrpc': McpProtocol.jsonRpcVersion,
@@ -98,12 +103,12 @@ void main() {
       client.onSamplingRequest((req) async {
         called++;
         return CreateMessageResult(
-          role: 'assistant',
-          content: const TextContent(text: 'pong'),
+          role: Role.assistant,
+          content: [TextContent(text: 'pong')],
           model: 'm',
         );
       });
-      await client.connect(transport);
+      await client.connect(transport, era: ProtocolEra.legacy);
       transport.simulateMessage({
         'jsonrpc': McpProtocol.jsonRpcVersion,
         'id': 'srv-7',
@@ -127,8 +132,8 @@ void main() {
 
     test('roots/list returns locally registered roots by default',
         () async {
-      client.addRoot(const Root(uri: 'file:///workspace', name: 'Workspace'));
-      await client.connect(transport);
+      client.addRoot(Root(uri: 'file:///workspace', name: 'Workspace'));
+      await client.connect(transport, era: ProtocolEra.legacy);
       transport.simulateMessage({
         'jsonrpc': McpProtocol.jsonRpcVersion,
         'id': 'srv-8',
@@ -152,7 +157,7 @@ void main() {
           'content': {'name': 'octocat'},
         };
       });
-      await client.connect(transport);
+      await client.connect(transport, era: ProtocolEra.legacy);
       transport.simulateMessage({
         'jsonrpc': McpProtocol.jsonRpcVersion,
         'id': 'srv-9',
@@ -176,7 +181,7 @@ void main() {
 
     test('unknown server-initiated method returns method-not-found error',
         () async {
-      await client.connect(transport);
+      await client.connect(transport, era: ProtocolEra.legacy);
       transport.simulateMessage({
         'jsonrpc': McpProtocol.jsonRpcVersion,
         'id': 'srv-10',
@@ -194,7 +199,11 @@ void main() {
     late MockTransport transport;
 
     setUp(() async {
-      client = Client(name: 'test-client', version: '1.0.0');
+      client = Client(
+        name: 'test-client',
+        version: '1.0.0',
+        capabilities: const ClientCapabilities(roots: true, sampling: true, elicitation: true),
+      );
       transport = MockTransport();
       transport.queueResponse({
         'jsonrpc': McpProtocol.jsonRpcVersion,
@@ -205,21 +214,43 @@ void main() {
           'capabilities': {},
         },
       });
-      await client.connect(transport);
+      await client.connect(transport, era: ProtocolEra.legacy);
     });
 
-    test('notifyCancelled sends notifications/cancelled with requestId',
-        () {
-      client.notifyCancelled('req-1', reason: 'user');
+    test('notifyCancelled sends notifications/cancelled for a request in flight',
+        () async {
+      final call = client.ping();
+      final pingId = transport.sentMessages.last['id'];
+      client.notifyCancelled(pingId, reason: 'user');
+      await expectLater(call, throwsA(isA<McpError>()));
       final msg = transport.sentMessages.last;
       expect(msg['method'], equals('notifications/cancelled'));
       expect(msg.containsKey('id'), isFalse);
-      expect(msg['params']['requestId'], equals('req-1'));
+      expect(msg['params']['requestId'], equals(pingId));
       expect(msg['params']['reason'], equals('user'));
+      // Nothing to cancel any more.
+      expect(() => client.notifyCancelled(pingId), throwsArgumentError);
     });
 
-    test('notifyProgress sends notifications/progress with progressToken',
-        () {
+    test('notifyProgress reports on a server request being handled', () async {
+      final gate = Completer<void>();
+      client.onSamplingRequest((p) async {
+        await gate.future;
+        return CreateMessageResult(role: Role.assistant, content: [TextContent(text: 'x')], model: 'm');
+      });
+      transport.simulateMessage({
+        'jsonrpc': '2.0',
+        'id': 'srv-1',
+        'method': 'sampling/createMessage',
+        'params': {
+          'messages': [
+            {'role': 'user', 'content': {'type': 'text', 'text': 'q'}}
+          ],
+          'maxTokens': 5,
+          '_meta': {'progressToken': 'tok'},
+        },
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 10));
       client.notifyProgress('tok', 0.5, total: 1.0, message: 'half');
       final msg = transport.sentMessages.last;
       expect(msg['method'], equals('notifications/progress'));
@@ -227,6 +258,10 @@ void main() {
       expect(msg['params']['progressToken'], equals('tok'));
       expect(msg['params']['progress'], equals(0.5));
       expect(msg['params']['total'], equals(1.0));
+      expect(() => client.notifyProgress('tok', 0.5), throwsArgumentError, reason: 'must increase');
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(() => client.notifyProgress('tok', 0.9), throwsArgumentError, reason: 'request finished');
     });
   });
 }

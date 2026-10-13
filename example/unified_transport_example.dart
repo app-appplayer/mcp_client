@@ -64,17 +64,11 @@ Future<void> exampleSseWithAuth(Logger logger) async {
     version: '1.0.0',
   );
 
-  // SSE with OAuth - automatically uses SseAuthClientTransport
+  // SSE with a token obtained elsewhere - sent as Authorization: Bearer
+  // (HTTP+SSE has no authorization flow of its own)
   final transportConfig = TransportConfig.sse(
     serverUrl: 'https://secure-api.example.com/sse',
     headers: {'User-Agent': 'MCP-Client/1.0'},
-    oauthConfig: OAuthConfig(
-      authorizationEndpoint: 'https://auth.example.com/authorize',
-      tokenEndpoint: 'https://auth.example.com/token',
-      clientId: 'mcp-client',
-      clientSecret: 'secret',
-    ),
-    // OR use bearer token directly
     bearerToken: 'your-bearer-token',
   );
 
@@ -103,14 +97,10 @@ Future<void> exampleSseWithCompression(Logger logger) async {
     version: '1.0.0',
   );
 
-  // SSE with compression - automatically uses SseCompressedClientTransport
+  // Compressed responses are decoded by the HTTP client itself
   final transportConfig = TransportConfig.sse(
     serverUrl: 'http://localhost:3000/sse',
     headers: {'Accept-Encoding': 'gzip, deflate'},
-    enableCompression: true,
-    enableGzip: true,
-    enableDeflate: true,
-    compressionLevel: 6,
   );
 
   final clientResult = await McpClient.createAndConnect(
@@ -120,7 +110,7 @@ Future<void> exampleSseWithCompression(Logger logger) async {
 
   await clientResult.fold(
     (client) async {
-      logger.info('Connected via compressed SSE transport');
+      logger.info('Connected (HTTP+SSE)');
       client.disconnect();
     },
     (error) {
@@ -138,7 +128,7 @@ Future<void> exampleSseWithHeartbeat(Logger logger) async {
     version: '1.0.0',
   );
 
-  // SSE with heartbeat - automatically uses SseHeartbeatClientTransport
+  // A ping every 30 s once connected; three unanswered in a row end it
   final transportConfig = TransportConfig.sse(
     serverUrl: 'http://localhost:3000/sse',
     heartbeatInterval: const Duration(seconds: 30),
@@ -184,14 +174,7 @@ Future<void> exampleHttpWithAllFeatures(Logger logger) async {
     },
     timeout: const Duration(seconds: 45),
     maxConcurrentRequests: 20,
-    useHttp2: true,
-    oauthConfig: OAuthConfig(
-      authorizationEndpoint: 'https://auth.example.com/authorize',
-      tokenEndpoint: 'https://auth.example.com/token',
-      clientId: 'mcp-client',
-      scopes: ['mcp:read', 'mcp:write'],
-    ),
-    enableCompression: true,
+    oauth: McpOAuth(McpOAuthOptions(redirectUri: 'http://localhost:8765/callback')),
     heartbeatInterval: const Duration(seconds: 60),
     maxMissedHeartbeats: 2,
   );
@@ -234,7 +217,6 @@ Future<void> exampleFeaturePriority(Logger logger) async {
   final transportConfig = TransportConfig.sse(
     serverUrl: 'https://api.example.com/sse',
     bearerToken: 'token123', // OAuth feature (highest priority)
-    enableCompression: true, // Compression feature
     heartbeatInterval: const Duration(seconds: 30), // Heartbeat feature
   );
 

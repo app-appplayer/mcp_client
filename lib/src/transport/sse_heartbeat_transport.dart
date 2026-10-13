@@ -81,6 +81,7 @@ class HeartbeatStats {
 }
 
 /// SSE Transport with heartbeat monitoring
+@Deprecated('Use SseClientTransport and Client.startKeepAlive (TransportConfig.sse(heartbeatInterval:)); this transport waits for heartbeat events no MCP server sends')
 class SseHeartbeatClientTransport implements ClientTransport {
   final String serverUrl;
   final Map<String, String> _baseHeaders;

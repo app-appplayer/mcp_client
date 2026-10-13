@@ -17,7 +17,7 @@ void main() {
       });
 
       test('fromTool creates from Tool object', () {
-        const tool = Tool(
+        final tool = Tool(
           name: 'search',
           description: 'Search the web',
           inputSchema: {
@@ -119,12 +119,12 @@ void main() {
 
       test('cacheFromTools initializes registry', () {
         final tools = [
-          const Tool(
+          Tool(
             name: 'calculator',
             description: 'Perform calculations',
             inputSchema: {'type': 'object'},
           ),
-          const Tool(
+          Tool(
             name: 'search',
             description: 'Search the web',
             inputSchema: {'type': 'object'},
@@ -161,7 +161,7 @@ void main() {
 
       test('getAllMetadata returns lightweight metadata list', () {
         final tools = [
-          const Tool(
+          Tool(
             name: 'calculator',
             description: 'Perform calculations',
             inputSchema: {'type': 'object', 'properties': {'a': {}, 'b': {}}},
@@ -179,7 +179,7 @@ void main() {
 
       test('getMetadata returns specific tool metadata', () {
         final tools = [
-          const Tool(
+          Tool(
             name: 'calculator',
             description: 'Perform calculations',
             inputSchema: {'type': 'object'},
@@ -198,7 +198,7 @@ void main() {
 
       test('getSchema returns full tool schema', () {
         final tools = [
-          const Tool(
+          Tool(
             name: 'calculator',
             description: 'Perform calculations',
             inputSchema: {
@@ -227,7 +227,7 @@ void main() {
 
       test('hasTool checks tool existence', () {
         final tools = [
-          const Tool(
+          Tool(
             name: 'calculator',
             description: 'Perform calculations',
             inputSchema: {'type': 'object'},
@@ -242,7 +242,7 @@ void main() {
 
       test('invalidateAll clears registry', () {
         final tools = [
-          const Tool(
+          Tool(
             name: 'calculator',
             description: 'Perform calculations',
             inputSchema: {'type': 'object'},
@@ -264,7 +264,7 @@ void main() {
 
       test('caching again replaces existing data', () {
         final tools1 = [
-          const Tool(
+          Tool(
             name: 'tool1',
             description: 'First tool',
             inputSchema: {'type': 'object'},
@@ -272,12 +272,12 @@ void main() {
         ];
 
         final tools2 = [
-          const Tool(
+          Tool(
             name: 'tool2',
             description: 'Second tool',
             inputSchema: {'type': 'object'},
           ),
-          const Tool(
+          Tool(
             name: 'tool3',
             description: 'Third tool',
             inputSchema: {'type': 'object'},
@@ -359,7 +359,7 @@ void main() {
           },
         });
 
-        await client.connect(mockTransport);
+        await client.connect(mockTransport, era: ProtocolEra.legacy);
 
         final registry = ToolRegistry();
         final metadata = await client.listToolsMetadata(registry);
@@ -400,7 +400,7 @@ void main() {
           'result': {'tools': []},
         });
 
-        await client.connect(mockTransport);
+        await client.connect(mockTransport, era: ProtocolEra.legacy);
 
         final registry = ToolRegistry();
         final metadata = await client.listToolsMetadata(registry);
@@ -413,7 +413,7 @@ void main() {
 
     group('Token Efficiency Verification', () {
       test('metadata JSON is smaller than full tool JSON', () {
-        const tool = Tool(
+        final tool = Tool(
           name: 'complex-tool',
           description: 'A tool with complex schema',
           inputSchema: {
@@ -438,9 +438,8 @@ void main() {
             },
             'required': ['param1', 'param2'],
           },
-          supportsProgress: true,
-          supportsCancellation: true,
-          metadata: {'version': '1.0', 'author': 'test'},
+          annotations: ToolAnnotations(readOnlyHint: true),
+          meta: {'io.example/version': '1.0', 'io.example/author': 'test'},
         );
 
         final fullJson = tool.toJson();

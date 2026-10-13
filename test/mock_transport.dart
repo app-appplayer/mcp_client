@@ -9,6 +9,9 @@ class MockTransport implements ClientTransport {
   final _closeCompleter = Completer<void>();
   final _responseQueue = <Map<String, dynamic>>[];
   final sentMessages = <Map<String, dynamic>>[];
+
+  /// Batches (JSON arrays) the client sent, e.g. its answer to a batch.
+  final sentBatches = <List<Map<String, dynamic>>>[];
   bool _closed = false;
 
   /// Optional callback for custom send handling
@@ -29,7 +32,7 @@ class MockTransport implements ClientTransport {
   /// Simulate a server-initiated message arriving at the client. Use for
   /// inbound `sampling/createMessage`, `roots/list`, `elicitation/create`
   /// requests and any spec notification the test wants to inject.
-  void simulateMessage(Map<String, dynamic> message) {
+  void simulateMessage(Object message) {
     if (!_closed) {
       _messageController.add(message);
     }
@@ -50,6 +53,11 @@ class MockTransport implements ClientTransport {
     // Call custom handler if provided
     if (onSend != null) {
       onSend!(message);
+    }
+
+    if (message is List) {
+      sentBatches.add([for (final m in message) Map<String, dynamic>.from(m as Map)]);
+      return;
     }
 
     // Store the sent message for later inspection

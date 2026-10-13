@@ -16,7 +16,6 @@ void main() async {
     },
     timeout: const Duration(seconds: 60),
     maxConcurrentRequests: 20,
-    useHttp2: true,
   );
 
   final result = await McpClient.createAndConnect(
@@ -48,7 +47,6 @@ void main() async {
     headers: {'Authorization': 'Bearer your-token'},
     timeout: const Duration(seconds: 30),
     maxConcurrentRequests: 10,
-    useHttp2: false, // Explicitly disable HTTP/2
   );
 
   await transportResult.fold(
@@ -70,13 +68,13 @@ void main() async {
   // Method 3: For OAuth-enabled HTTP transport
   final oauthTransport = await StreamableHttpClientTransport.create(
     baseUrl: 'https://oauth-api.example.com',
-    oauthConfig: OAuthConfig(
-      authorizationEndpoint: 'https://auth.example.com/authorize',
-      tokenEndpoint: 'https://auth.example.com/token',
-      clientId: 'your-client-id',
-      clientSecret: 'your-client-secret',
-      scopes: ['read', 'write'],
-    ),
+    oauth: McpOAuth(McpOAuthOptions(
+      redirectUri: 'http://localhost:8765/callback',
+      // A client issued in advance by that authorization server.
+      preRegistered: {
+        'https://auth.example.com': const OAuthClientRegistration(clientId: 'your-client-id'),
+      },
+    )),
     headers: {'User-Agent': 'MCP HTTP Client/1.0'},
     maxConcurrentRequests: 15,
   );

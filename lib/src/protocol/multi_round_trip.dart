@@ -14,6 +14,8 @@
 /// here is additive and only exercised on the stateless (2026-07-28) path.
 library;
 
+import '../schema/schema.g.dart';
+
 /// Draft `ResultType` discriminator values (`schema.ts` `ResultType`).
 ///
 /// A 2026-07-28 result always carries `resultType`. A result from an earlier
@@ -43,88 +45,6 @@ class McpResultType {
   }
 }
 
-/// Draft `InputRequiredResult` — the server needs more input before the original
-/// request can complete. At least one of [inputRequests] / [requestState] is
-/// present; [requestState] is an OPAQUE blob the client MUST NOT interpret and
-/// echoes back verbatim on retry.
-class InputRequiredResult {
-  /// Server-issued requests keyed by a server-assigned identifier. Each value is
-  /// a `{ "method": ..., "params": ... }` request object
-  /// (`sampling/createMessage` | `roots/list` | `elicitation/create`).
-  final Map<String, Map<String, dynamic>> inputRequests;
-
-  /// Opaque state blob echoed back on retry (may be null when only inputs were
-  /// requested).
-  final String? requestState;
-
-  const InputRequiredResult({
-    this.inputRequests = const {},
-    this.requestState,
-  });
-
-  factory InputRequiredResult.fromJson(Map<String, dynamic> json) {
-    final raw = json['inputRequests'];
-    final reqs = <String, Map<String, dynamic>>{};
-    if (raw is Map) {
-      raw.forEach((k, v) {
-        if (v is Map) reqs[k as String] = Map<String, dynamic>.from(v);
-      });
-    }
-    return InputRequiredResult(
-      inputRequests: reqs,
-      requestState: json['requestState'] as String?,
-    );
-  }
-}
-
-/// Draft `SubscriptionFilter` — the opt-in set of notification types the client
-/// requests on a `subscriptions/listen` stream. The server MUST NOT deliver a
-/// type not requested here.
-class SubscriptionFilter {
-  final bool toolsListChanged;
-  final bool promptsListChanged;
-  final bool resourcesListChanged;
-
-  /// Resource URIs to receive `notifications/resources/updated` for (replaces
-  /// the former `resources/subscribe` RPC).
-  final List<String> resourceSubscriptions;
-
-  const SubscriptionFilter({
-    this.toolsListChanged = false,
-    this.promptsListChanged = false,
-    this.resourcesListChanged = false,
-    this.resourceSubscriptions = const <String>[],
-  });
-
-  factory SubscriptionFilter.fromJson(Map<String, dynamic> json) {
-    final subs = json['resourceSubscriptions'];
-    return SubscriptionFilter(
-      toolsListChanged: json['toolsListChanged'] == true,
-      promptsListChanged: json['promptsListChanged'] == true,
-      resourcesListChanged: json['resourcesListChanged'] == true,
-      resourceSubscriptions: subs is List
-          ? subs.map((e) => e.toString()).toList(growable: false)
-          : const <String>[],
-    );
-  }
-
-  /// Emits only the requested fields (booleans only when true, URIs only when
-  /// non-empty) — matching the `SubscriptionsListenRequestParams.notifications`
-  /// shape.
-  Map<String, dynamic> toJson() => <String, dynamic>{
-        if (toolsListChanged) 'toolsListChanged': true,
-        if (promptsListChanged) 'promptsListChanged': true,
-        if (resourcesListChanged) 'resourcesListChanged': true,
-        if (resourceSubscriptions.isNotEmpty)
-          'resourceSubscriptions': resourceSubscriptions,
-      };
-}
-
-/// A live 2026-07-28 `subscriptions/listen` subscription handle (SEP-2577).
-///
-/// Exposes the acknowledged filter, the stream of notifications delivered on it
-/// (each stamped with the subscriptionId), and [cancel] to terminate the stream
-/// (sends `notifications/cancelled` referencing the subscriptionId).
 class Subscription {
   /// The subscriptionId (== the JSON-RPC id of the `subscriptions/listen`
   /// request that opened this stream).

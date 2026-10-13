@@ -1,528 +1,175 @@
-/// Exhaustive toJson/fromJson round-trip coverage for `lib/src/models/models.dart`.
-///
-/// Targets branches left uncovered by the integration-style tests elsewhere
-/// in this suite: optional-field presence/absence toggles, alternate wire
-/// formats (nested vs flat resource content), and the `Content.fromJson`
-/// type dispatcher including the unknown-type error path.
+/// Client-side value types: the package's own classes (JSON-RPC message,
+/// health, pending operations, progress, cache, capabilities, tool metadata)
+/// and the protocol types as this client reads them (generated schema types —
+/// their field-level round trip is covered exhaustively in `mcp_schema`).
 library;
 
 import 'package:mcp_client/mcp_client.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('Content.fromJson dispatch', () {
-    test('dispatches resource_link type', () {
-      final content = Content.fromJson({
-        'type': 'resource_link',
-        'uri': 'file:///a.txt',
-      });
-      expect(content, isA<ResourceLinkContent>());
-      expect((content as ResourceLinkContent).uri, 'file:///a.txt');
+  group('protocol types as the client reads them', () {
+    test('ContentBlock dispatch keeps an unknown kind', () {
+      expect(ContentBlock.fromJson({'type': 'resource_link', 'uri': 'file:///a', 'name': 'a'}),
+          isA<ResourceLink>());
+      final unknown = ContentBlock.fromJson({'type': 'hologram'});
+      expect(unknown, isA<UnknownContentBlock>());
+      expect(unknown.toJson(), {'type': 'hologram'});
     });
 
-    test('throws ArgumentError on unknown type', () {
-      expect(
-        () => Content.fromJson({'type': 'bogus'}),
-        throwsA(isA<ArgumentError>()),
-      );
-    });
-  });
-
-  group('AudioContent', () {
-    test('round-trips with annotations', () {
-      const content = AudioContent(
-        data: 'base64data',
-        mimeType: 'audio/mpeg',
-        annotations: {'audience': 'assistant'},
-      );
-      final json = content.toJson();
-      expect(json['type'], 'audio');
-      expect(json['data'], 'base64data');
-      expect(json['mimeType'], 'audio/mpeg');
-      expect(json['annotations'], {'audience': 'assistant'});
-
-      final decoded = AudioContent.fromJson(json);
-      expect(decoded.data, content.data);
-      expect(decoded.mimeType, content.mimeType);
-      expect(decoded.annotations, content.annotations);
-    });
-
-    test('round-trips without annotations', () {
-      const content = AudioContent(data: 'd', mimeType: 'audio/wav');
-      final json = content.toJson();
-      expect(json.containsKey('annotations'), isFalse);
-      final decoded = AudioContent.fromJson(json);
-      expect(decoded.annotations, isNull);
-    });
-  });
-
-  group('ResourceLinkContent', () {
-    test('round-trips with all optional fields', () {
-      const content = ResourceLinkContent(
-        uri: 'file:///a.txt',
-        name: 'a.txt',
-        description: 'A file',
-        mimeType: 'text/plain',
-        annotations: {'x': 1},
-        meta: {'y': 2},
-      );
-      final json = content.toJson();
-      expect(json['type'], 'resource_link');
-      expect(json['uri'], 'file:///a.txt');
-      expect(json['name'], 'a.txt');
-      expect(json['description'], 'A file');
-      expect(json['mimeType'], 'text/plain');
-      expect(json['annotations'], {'x': 1});
-      expect(json['_meta'], {'y': 2});
-
-      final decoded = ResourceLinkContent.fromJson(json);
-      expect(decoded.uri, content.uri);
-      expect(decoded.name, content.name);
-      expect(decoded.description, content.description);
-      expect(decoded.mimeType, content.mimeType);
-      expect(decoded.annotations, content.annotations);
-      expect(decoded.meta, content.meta);
-    });
-
-    test('round-trips with only required field', () {
-      const content = ResourceLinkContent(uri: 'file:///b.txt');
-      final json = content.toJson();
-      expect(json.keys, containsAll(['type', 'uri']));
-      expect(json.containsKey('name'), isFalse);
-      expect(json.containsKey('description'), isFalse);
-      expect(json.containsKey('mimeType'), isFalse);
-      expect(json.containsKey('annotations'), isFalse);
-      expect(json.containsKey('_meta'), isFalse);
-
-      final decoded = ResourceLinkContent.fromJson(json);
-      expect(decoded.uri, content.uri);
-      expect(decoded.name, isNull);
-      expect(decoded.meta, isNull);
-    });
-  });
-
-  group('ImageContent', () {
-    test('fromBase64 factory builds data-based content', () {
-      final content =
-          ImageContent.fromBase64(data: 'b64==', mimeType: 'image/png');
-      expect(content.data, 'b64==');
-      expect(content.mimeType, 'image/png');
-      expect(content.url, isNull);
-    });
-
-    test('toJson prefers data over url when both null vs data set', () {
-      const withData = ImageContent(
-        data: 'b64==',
-        mimeType: 'image/png',
-        annotations: {'k': 'v'},
-      );
-      final json = withData.toJson();
-      expect(json['data'], 'b64==');
-      expect(json.containsKey('url'), isFalse);
-      expect(json['annotations'], {'k': 'v'});
-    });
-
-    test('toJson falls back to url when data is null', () {
-      const withUrl = ImageContent(
-        url: 'https://example.com/a.png',
-        mimeType: 'image/png',
-      );
-      final json = withUrl.toJson();
-      expect(json['url'], 'https://example.com/a.png');
-      expect(json.containsKey('data'), isFalse);
-    });
-  });
-
-  group('ResourceContent', () {
-    test('toJson emits all optional fields inside nested resource', () {
-      const content = ResourceContent(
-        uri: 'file:///r.txt',
-        text: 'hello',
-        blob: 'blobdata',
-        mimeType: 'text/plain',
-        annotations: {'a': 1},
-      );
-      final json = content.toJson();
-      expect(json['type'], 'resource');
-      final resource = json['resource'] as Map<String, dynamic>;
-      expect(resource['uri'], 'file:///r.txt');
-      expect(resource['text'], 'hello');
-      expect(resource['blob'], 'blobdata');
-      expect(resource['mimeType'], 'text/plain');
-      expect(json['annotations'], {'a': 1});
-    });
-
-    test('fromJson parses nested 2025 format', () {
-      final decoded = ResourceContent.fromJson({
-        'type': 'resource',
-        'resource': {
-          'uri': 'file:///r.txt',
-          'text': 'hello',
-          'blob': 'blobdata',
-          'mimeType': 'text/plain',
-        },
-        'annotations': {'a': 1},
-      });
-      expect(decoded.uri, 'file:///r.txt');
-      expect(decoded.text, 'hello');
-      expect(decoded.blob, 'blobdata');
-      expect(decoded.mimeType, 'text/plain');
-      expect(decoded.annotations, {'a': 1});
-    });
-
-    test('fromJson parses older flat format', () {
-      final decoded = ResourceContent.fromJson({
-        'uri': 'file:///flat.txt',
-        'text': 'flat text',
-      });
-      expect(decoded.uri, 'file:///flat.txt');
-      expect(decoded.text, 'flat text');
-    });
-  });
-
-  group('Tool', () {
-    test('toJson/fromJson round-trip icons and metadata', () {
-      const tool = Tool(
-        name: 'search',
-        title: 'Search Tool',
-        description: 'Searches things',
-        inputSchema: {'type': 'object'},
-        outputSchema: {'type': 'object'},
-        icons: [
-          {'src': 'icon.png', 'sizes': '48x48'},
+    test('Tool keeps every field and what it does not model', () {
+      final json = {
+        'name': 'echo',
+        'title': 'Echo',
+        'description': 'd',
+        'inputSchema': {'type': 'object'},
+        'outputSchema': {'type': 'object'},
+        'annotations': {'readOnlyHint': true},
+        'execution': {'taskSupport': 'optional'},
+        'icons': [
+          {'src': 'https://example.com/i.png'}
         ],
-        meta: {'m': 1},
-        supportsProgress: true,
-        supportsCancellation: true,
-        metadata: {'extra': 'data'},
-      );
-      final json = tool.toJson();
-      expect(json['icons'], [
-        {'src': 'icon.png', 'sizes': '48x48'},
-      ]);
-      expect(json['_meta'], {'m': 1});
-      expect(json['metadata'], {'extra': 'data'});
-
-      final decoded = Tool.fromJson(json);
-      expect(decoded.name, tool.name);
-      expect(decoded.title, tool.title);
-      expect(decoded.icons, tool.icons);
-      expect(decoded.meta, tool.meta);
-      expect(decoded.supportsProgress, isTrue);
-      expect(decoded.supportsCancellation, isTrue);
-      expect(decoded.metadata, tool.metadata);
-    });
-  });
-
-  group('CallToolResult', () {
-    test('toJson emits structuredContent and isError when present', () {
-      const result = CallToolResult(
-        [TextContent(text: 'hi')],
-        structuredContent: {'ok': true},
-        isStreaming: true,
-        isError: true,
-      );
-      final json = result.toJson();
-      expect(json['structuredContent'], {'ok': true});
-      expect(json['isStreaming'], isTrue);
-      expect(json['isError'], isTrue);
-      expect((json['content'] as List).length, 1);
+        '_meta': {'io.example/k': 1},
+        'io.example/vendor': true,
+      };
+      final tool = Tool.fromJson(json);
+      expect(tool.annotations!.readOnlyHint, isTrue);
+      expect(tool.execution!.taskSupport, ToolExecutionTaskSupport.optional);
+      expect(tool.check(), isEmpty);
+      expect(tool.toJson(), json);
     });
 
-    test('fromJson round-trips a minimal result', () {
-      final json = const CallToolResult([TextContent(text: 'hi')]).toJson();
-      final decoded = CallToolResult.fromJson(json);
-      expect(decoded.content.length, 1);
-      expect(decoded.isError, isNull);
-      expect(decoded.isStreaming, isFalse);
-    });
-  });
-
-  group('Resource', () {
-    test('toJson/fromJson round-trip all optional fields', () {
-      const resource = Resource(
-        uri: 'file:///a.txt',
-        name: 'a.txt',
-        title: 'A',
-        description: 'desc',
-        mimeType: 'text/plain',
-        icons: [
-          {'src': 'i.png'},
+    test('CallToolResult with structuredContent and isError', () {
+      final r = CallToolResult.fromJson({
+        'content': [
+          {'type': 'text', 'text': 'x'}
         ],
-        meta: {'m': 1},
-        metadata: {'extra': true},
-      );
-      final json = resource.toJson();
-      expect(json['title'], 'A');
-      expect(json['mimeType'], 'text/plain');
-      expect(json['icons'], [
-        {'src': 'i.png'},
-      ]);
-      expect(json['_meta'], {'m': 1});
-      expect(json['metadata'], {'extra': true});
-
-      final decoded = Resource.fromJson(json);
-      expect(decoded.title, resource.title);
-      expect(decoded.icons, resource.icons);
-      expect(decoded.meta, resource.meta);
-      expect(decoded.metadata, resource.metadata);
-    });
-  });
-
-  group('ResourceContentInfo / ReadResourceResult', () {
-    test('ResourceContentInfo.toJson emits all optional fields', () {
-      const info = ResourceContentInfo(
-        uri: 'file:///a.txt',
-        mimeType: 'text/plain',
-        text: 'hi',
-        blob: 'b',
-      );
-      final json = info.toJson();
-      expect(json, {
-        'uri': 'file:///a.txt',
-        'mimeType': 'text/plain',
-        'text': 'hi',
-        'blob': 'b',
+        'structuredContent': {'v': 1},
+        'isError': true,
       });
+      expect(r.structuredContent, {'v': 1});
+      expect(r.isError, isTrue);
+      expect(r.content.single, isA<TextContent>());
     });
 
-    test('ReadResourceResult toJson wraps contents', () {
-      const result = ReadResourceResult(
-        contents: [ResourceContentInfo(uri: 'file:///a.txt', text: 'hi')],
-      );
-      final json = result.toJson();
-      expect((json['contents'] as List).length, 1);
-    });
-
-    test('ReadResourceResult.fromJson parses contents list', () {
-      final decoded = ReadResourceResult.fromJson({
+    test('ReadResourceResult contents read by kind; 2.x accessors still work', () {
+      final r = ReadResourceResult.fromJson({
         'contents': [
-          {'uri': 'file:///a.txt', 'text': 'hi', 'mimeType': 'text/plain'},
+          {'uri': 'file:///a', 'mimeType': 'text/plain', 'text': 'hi'},
+          {'uri': 'file:///b', 'blob': 'YQ=='},
         ],
       });
-      expect(decoded.contents.length, 1);
-      expect(decoded.contents.first.uri, 'file:///a.txt');
-      expect(decoded.contents.first.text, 'hi');
-      expect(decoded.contents.first.mimeType, 'text/plain');
+      expect(r.contents[0], isA<TextResourceContents>());
+      expect(r.contents[0].text, 'hi');
+      expect(r.contents[0].mimeType, 'text/plain');
+      expect(r.contents[1].blob, 'YQ==');
+      expect(r.contents[1].uri, 'file:///b');
+      expect(r.contents[1].text, isNull);
     });
 
-    test('ReadResourceResult.fromJson defaults to empty when absent', () {
-      final decoded = ReadResourceResult.fromJson(const {});
-      expect(decoded.contents, isEmpty);
-    });
-  });
-
-  group('PromptArgument', () {
-    test('toJson/fromJson round-trip with description and default', () {
-      const arg = PromptArgument(
-        name: 'x',
-        description: 'desc',
-        required: true,
-        defaultValue: 'dv',
-      );
-      final json = arg.toJson();
-      expect(json, {
-        'name': 'x',
-        'required': true,
-        'description': 'desc',
-        'default': 'dv',
-      });
-
-      final decoded = PromptArgument.fromJson(json);
-      expect(decoded.name, 'x');
-      expect(decoded.description, 'desc');
-      expect(decoded.required, isTrue);
-      expect(decoded.defaultValue, 'dv');
-    });
-
-    test('toJson omits absent optionals', () {
-      const arg = PromptArgument(name: 'y');
-      final json = arg.toJson();
-      expect(json.containsKey('description'), isFalse);
-      expect(json.containsKey('default'), isFalse);
-      expect(json['required'], isFalse);
-    });
-  });
-
-  group('Prompt', () {
-    test('toJson/fromJson round-trip all optional fields', () {
-      const prompt = Prompt(
-        name: 'greet',
-        title: 'Greeting',
-        description: 'says hi',
-        arguments: [PromptArgument(name: 'who', required: true)],
-        icons: [
-          {'src': 'p.png'},
-        ],
-        meta: {'m': 1},
-        metadata: {'e': true},
-      );
-      final json = prompt.toJson();
-      expect(json['title'], 'Greeting');
-      expect(json['description'], 'says hi');
-      expect(json['icons'], [
-        {'src': 'p.png'},
-      ]);
-      expect(json['_meta'], {'m': 1});
-      expect(json['metadata'], {'e': true});
-      expect((json['arguments'] as List).length, 1);
-
-      final decoded = Prompt.fromJson(json);
-      expect(decoded.title, prompt.title);
-      expect(decoded.description, prompt.description);
-      expect(decoded.arguments.length, 1);
-      expect(decoded.arguments.first.name, 'who');
-      expect(decoded.icons, prompt.icons);
-      expect(decoded.meta, prompt.meta);
-      expect(decoded.metadata, prompt.metadata);
-    });
-  });
-
-  group('GetPromptResult', () {
-    test('toJson/fromJson round-trip with description', () {
-      const result = GetPromptResult(
-        description: 'a prompt result',
-        messages: [Message(role: 'user', content: TextContent(text: 'hi'))],
-      );
-      final json = result.toJson();
-      expect(json['description'], 'a prompt result');
-      expect((json['messages'] as List).length, 1);
-
-      final decoded = GetPromptResult.fromJson(json);
-      expect(decoded.description, 'a prompt result');
-      expect(decoded.messages.length, 1);
-      expect(decoded.messages.first.role, 'user');
-    });
-  });
-
-  group('ModelHint / ModelPreferences', () {
-    test('ModelHint round-trips with weight', () {
-      const hint = ModelHint(name: 'gpt', weight: 0.75);
-      final json = hint.toJson();
-      expect(json, {'name': 'gpt', 'weight': 0.75});
-      final decoded = ModelHint.fromJson(json);
-      expect(decoded.name, 'gpt');
-      expect(decoded.weight, 0.75);
-    });
-
-    test('ModelHint round-trips without weight', () {
-      const hint = ModelHint(name: 'gpt');
-      final json = hint.toJson();
-      expect(json.containsKey('weight'), isFalse);
-      final decoded = ModelHint.fromJson(json);
-      expect(decoded.weight, isNull);
-    });
-
-    test('ModelPreferences round-trips all fields', () {
-      const prefs = ModelPreferences(
-        hints: [ModelHint(name: 'gpt', weight: 1.0)],
-        costPriority: 0.1,
-        speedPriority: 0.2,
-        intelligencePriority: 0.3,
-      );
-      final json = prefs.toJson();
-      expect((json['hints'] as List).length, 1);
-      expect(json['costPriority'], 0.1);
-      expect(json['speedPriority'], 0.2);
-      expect(json['intelligencePriority'], 0.3);
-
-      final decoded = ModelPreferences.fromJson(json);
-      expect(decoded.hints!.length, 1);
-      expect(decoded.costPriority, 0.1);
-      expect(decoded.speedPriority, 0.2);
-      expect(decoded.intelligencePriority, 0.3);
-    });
-
-    test('ModelPreferences empty hints list is omitted', () {
-      const prefs = ModelPreferences(hints: []);
-      final json = prefs.toJson();
-      expect(json.containsKey('hints'), isFalse);
-    });
-
-    test('ModelPreferences.fromJson tolerates absent fields', () {
-      final decoded = ModelPreferences.fromJson(const {});
-      expect(decoded.hints, isNull);
-      expect(decoded.costPriority, isNull);
-      expect(decoded.speedPriority, isNull);
-      expect(decoded.intelligencePriority, isNull);
-    });
-  });
-
-  group('CreateMessageRequest', () {
-    test('toJson emits all optional fields', () {
-      const request = CreateMessageRequest(
-        messages: [Message(role: 'user', content: TextContent(text: 'hi'))],
-        modelPreferences: ModelPreferences(costPriority: 0.5),
-        systemPrompt: 'be nice',
-        includeContext: 'thisServer',
-        maxTokens: 100,
-        temperature: 0.5,
-        stopSequences: ['STOP'],
-        metadata: {'k': 'v'},
-      );
-      final json = request.toJson();
-      expect(json['modelPreferences'], isNotNull);
-      expect(json['systemPrompt'], 'be nice');
-      expect(json['includeContext'], 'thisServer');
-      expect(json['temperature'], 0.5);
-      expect(json['stopSequences'], ['STOP']);
-      expect(json['metadata'], {'k': 'v'});
-    });
-
-    test('fromJson parses all optional fields', () {
-      final decoded = CreateMessageRequest.fromJson({
-        'messages': [
-          {
-            'role': 'user',
-            'content': {'type': 'text', 'text': 'hi'},
-          },
-        ],
-        'modelPreferences': {'costPriority': 0.5},
-        'stopSequences': ['A', 'B'],
-        'temperature': 1,
-        'metadata': {'k': 'v'},
+    test('list results carry nextCursor and _meta', () {
+      final r = ListToolsResult.fromJson({
         'tools': [
-          {
-            'name': 't1',
-            'description': 'a tool',
-            'inputSchema': {'type': 'object'},
-          },
+          {'name': 't', 'inputSchema': {'type': 'object'}}
         ],
-        'toolChoice': 'auto',
+        'nextCursor': 'c2',
+        '_meta': {'io.example/k': 1},
       });
-      expect(decoded.modelPreferences!.costPriority, 0.5);
-      expect(decoded.stopSequences, ['A', 'B']);
-      expect(decoded.temperature, 1.0);
-      expect(decoded.metadata, {'k': 'v'});
-      expect(decoded.tools!.length, 1);
-      expect(decoded.tools!.first.name, 't1');
-      expect(decoded.toolChoice, 'auto');
+      expect(r.nextCursor, 'c2');
+      expect(r.tools.single.name, 't');
+      expect(r.toJson()['_meta'], {'io.example/k': 1});
     });
 
-    test('SamplingToolChoice helpers produce canonical shapes', () {
-      expect(SamplingToolChoice.auto, 'auto');
-      expect(SamplingToolChoice.none, 'none');
-      expect(SamplingToolChoice.required, 'required');
-      expect(SamplingToolChoice.tool('t1'), {'type': 'tool', 'name': 't1'});
+    test('InitializeResult reads instructions and every serverInfo field', () {
+      final r = InitializeResult.fromJson({
+        'protocolVersion': '2025-11-25',
+        'capabilities': {'tools': {'listChanged': true}},
+        'serverInfo': {
+          'name': 's',
+          'version': '1',
+          'title': 'S',
+          'websiteUrl': 'https://example.com',
+          'icons': [
+            {'src': 'https://example.com/i.png'}
+          ],
+        },
+        'instructions': 'Use tools.',
+      });
+      expect(r.instructions, 'Use tools.');
+      expect(r.serverInfo.title, 'S');
+      expect(r.serverInfo.websiteUrl, 'https://example.com');
+      expect(r.check(), isEmpty);
+    });
+
+    test('2.x helpers build the schema types', () {
+      expect(ResourceContentInfo(uri: 'u', text: 't'), isA<TextResourceContents>());
+      expect(Message(role: 'assistant', content: TextContent(text: 'x')).role, Role.assistant);
+      expect(ResourceContent(uri: 'u', text: 't').resource, isA<TextResourceContents>());
     });
   });
 
-  group('Root', () {
-    test('toJson emits description when set', () {
-      const root = Root(uri: 'file:///r', name: 'r', description: 'a root');
-      final json = root.toJson();
-      expect(json['description'], 'a root');
+  group('ClientCapabilities', () {
+    test('roots without listChanged', () {
+      final caps = ClientCapabilities.fromJson({'roots': <String, dynamic>{}});
+      expect(caps.roots, isTrue);
+      expect(caps.rootsListChanged, isFalse);
     });
 
-    test('fromJson parses all fields', () {
-      final decoded = Root.fromJson({
-        'uri': 'file:///r',
-        'name': 'r',
-        'description': 'a root',
+    test('every sub-field round-trips', () {
+      final json = {
+        'roots': {'listChanged': true},
+        'sampling': {'context': <String, dynamic>{}, 'tools': <String, dynamic>{}},
+        'elicitation': {'form': <String, dynamic>{}, 'url': <String, dynamic>{}},
+        'tasks': {'list': <String, dynamic>{}},
+        'experimental': {'x': <String, dynamic>{}},
+        'extensions': {'io.modelcontextprotocol/tasks': <String, dynamic>{}},
+      };
+      final caps = ClientCapabilities.fromJson(json);
+      expect(caps.samplingContext, isTrue);
+      expect(caps.samplingTools, isTrue);
+      expect(caps.elicitationForm, isTrue);
+      expect(caps.elicitationUrl, isTrue);
+      expect(caps.toJson(), json);
+    });
+  });
+
+  group('ServerCapabilities', () {
+    test('equal JSON means equal', () {
+      bool flag = true;
+      final a = ServerCapabilities(tools: flag, resources: flag);
+      final b = ServerCapabilities(tools: flag, resources: flag);
+      const c = ServerCapabilities(tools: false);
+      expect(identical(a, b), isFalse);
+      expect(a, equals(b));
+      expect(a.hashCode, equals(b.hashCode));
+      expect(a, isNot(equals(c)));
+    });
+
+    test('every field the protocol defines', () {
+      final json = {
+        'tools': {'listChanged': true},
+        'resources': {'subscribe': true, 'listChanged': true},
+        'prompts': {'listChanged': true},
+        'logging': <String, dynamic>{},
+        'completions': <String, dynamic>{},
+        'tasks': {'list': <String, dynamic>{}},
+        'experimental': {'x': <String, dynamic>{}},
+        'extensions': {'io.modelcontextprotocol/tasks': <String, dynamic>{}},
+      };
+      final caps = ServerCapabilities.fromJson(json);
+      expect(caps.resourcesSubscribe, isTrue);
+      expect(caps.completions, isTrue);
+      expect(caps.hasExtension('io.modelcontextprotocol/tasks'), isTrue);
+      expect(caps.toJson(), json);
+    });
+
+    test('a field this class does not name survives in raw', () {
+      final caps = ServerCapabilities.fromJson({
+        'tools': <String, dynamic>{},
+        'io.example/future': {'on': true},
       });
-      expect(decoded.uri, 'file:///r');
-      expect(decoded.name, 'r');
-      expect(decoded.description, 'a root');
+      expect(caps.raw!.extra, {'io.example/future': {'on': true}});
+      expect(caps.toJson()['io.example/future'], {'on': true});
     });
   });
 
@@ -674,7 +321,7 @@ void main() {
     test('isExpired reflects age vs maxAge', () {
       final fresh = CachedResource(
         uri: 'file:///a',
-        content: const ReadResourceResult(contents: []),
+        content: ReadResourceResult(contents: []),
         cachedAt: DateTime.now(),
         maxAge: const Duration(minutes: 5),
       );
@@ -682,7 +329,7 @@ void main() {
 
       final stale = CachedResource(
         uri: 'file:///a',
-        content: const ReadResourceResult(contents: []),
+        content: ReadResourceResult(contents: []),
         cachedAt: DateTime.now().subtract(const Duration(minutes: 10)),
         maxAge: const Duration(minutes: 5),
       );
@@ -692,7 +339,7 @@ void main() {
     test('toJson serializes fields', () {
       final resource = CachedResource(
         uri: 'file:///a',
-        content: const ReadResourceResult(contents: []),
+        content: ReadResourceResult(contents: []),
         cachedAt: DateTime.utc(2024, 1, 1),
         maxAge: const Duration(seconds: 30),
       );
@@ -703,283 +350,6 @@ void main() {
     });
   });
 
-  group('ClientCapabilities.fromJson defaults', () {
-    test('roots without explicit listChanged defaults to false', () {
-      final caps = ClientCapabilities.fromJson({'roots': <String, dynamic>{}});
-      expect(caps.roots, isTrue);
-      expect(caps.rootsListChanged, isFalse);
-    });
-  });
-
-  group('ServerCapabilities equality/hash/toString', () {
-    test('equal instances compare equal and share hashCode', () {
-      // Non-const construction (via a mutable local) so `a` and `b` are
-      // distinct object identities with equal field values — this forces
-      // operator== to evaluate the full field-by-field comparison instead
-      // of short-circuiting on `identical(this, other)`, which const
-      // canonicalization would otherwise trigger for two `const` literals
-      // with the same arguments.
-      bool flag = true;
-      final a = ServerCapabilities(tools: flag, resources: flag);
-      flag = true;
-      final b = ServerCapabilities(tools: flag, resources: flag);
-      const c = ServerCapabilities(tools: false);
-
-      expect(identical(a, b), isFalse);
-      expect(a, equals(b));
-      expect(a.hashCode, equals(b.hashCode));
-      expect(a, isNot(equals(c)));
-      expect(a, isNot(equals('not a ServerCapabilities')));
-    });
-
-    test('toJson emits extensions when present', () {
-      const caps = ServerCapabilities(
-        tools: true,
-        extensions: {
-          'io.modelcontextprotocol/tasks': <String, dynamic>{},
-        },
-      );
-      final json = caps.toJson();
-      expect(json['extensions'], {
-        'io.modelcontextprotocol/tasks': <String, dynamic>{},
-      });
-    });
-
-    test('toString includes all fields', () {
-      const caps = ServerCapabilities(
-        tools: true,
-        resources: true,
-        prompts: true,
-        logging: true,
-        sampling: true,
-      );
-      final str = caps.toString();
-      expect(str, contains('tools: true'));
-      expect(str, contains('resources: true'));
-      expect(str, contains('prompts: true'));
-      expect(str, contains('logging: true'));
-      expect(str, contains('sampling: true'));
-    });
-  });
-
-  group('InitializeRequest / InitializeResult', () {
-    test('InitializeRequest round-trips', () {
-      const request = InitializeRequest(
-        clientInfo: ClientInfo(name: 'c', version: '1.0'),
-        protocolVersion: '2025-11-25',
-      );
-      final json = request.toJson();
-      expect(json['protocolVersion'], '2025-11-25');
-
-      final decoded = InitializeRequest.fromJson(json);
-      expect(decoded.clientInfo.name, 'c');
-      expect(decoded.protocolVersion, '2025-11-25');
-    });
-
-    test('InitializeResult round-trips with capabilities', () {
-      const result = InitializeResult(
-        serverInfo: ServerInfo(name: 's', version: '1.0'),
-        protocolVersion: '2025-11-25',
-        capabilities: {'tools': <String, dynamic>{}},
-      );
-      final json = result.toJson();
-      expect(json['capabilities'], {'tools': <String, dynamic>{}});
-
-      final decoded = InitializeResult.fromJson(json);
-      expect(decoded.serverInfo.name, 's');
-      expect(decoded.protocolVersion, '2025-11-25');
-      expect(decoded.capabilities, {'tools': <String, dynamic>{}});
-    });
-  });
-
-  group('List-changed notifications', () {
-    test('ToolsListChangedNotification round-trips as empty object', () {
-      const n = ToolsListChangedNotification();
-      expect(n.toJson(), <String, dynamic>{});
-      expect(
-        ToolsListChangedNotification.fromJson(const {}),
-        const ToolsListChangedNotification(),
-      );
-    });
-
-    test('ResourcesListChangedNotification round-trips as empty object', () {
-      const n = ResourcesListChangedNotification();
-      expect(n.toJson(), <String, dynamic>{});
-      expect(
-        ResourcesListChangedNotification.fromJson(const {}),
-        const ResourcesListChangedNotification(),
-      );
-    });
-
-    test('PromptsListChangedNotification round-trips as empty object', () {
-      const n = PromptsListChangedNotification();
-      expect(n.toJson(), <String, dynamic>{});
-      expect(
-        PromptsListChangedNotification.fromJson(const {}),
-        const PromptsListChangedNotification(),
-      );
-    });
-
-    test('ResourceUpdatedNotification round-trips uri', () {
-      const n = ResourceUpdatedNotification(uri: 'file:///a');
-      final json = n.toJson();
-      expect(json, {'uri': 'file:///a'});
-      final decoded = ResourceUpdatedNotification.fromJson(json);
-      expect(decoded.uri, 'file:///a');
-    });
-  });
-
-  group('List*Result wrappers', () {
-    test('ListToolsResult round-trips', () {
-      const result = ListToolsResult(
-        tools: [
-          Tool(
-            name: 't',
-            description: 'd',
-            inputSchema: {'type': 'object'},
-          ),
-        ],
-      );
-      final json = result.toJson();
-      final decoded = ListToolsResult.fromJson(json);
-      expect(decoded.tools.length, 1);
-      expect(decoded.tools.first.name, 't');
-    });
-
-    test('ListResourcesResult round-trips', () {
-      const result = ListResourcesResult(
-        resources: [
-          Resource(uri: 'file:///a', name: 'a', description: 'd'),
-        ],
-      );
-      final json = result.toJson();
-      final decoded = ListResourcesResult.fromJson(json);
-      expect(decoded.resources.length, 1);
-      expect(decoded.resources.first.uri, 'file:///a');
-    });
-
-    test('ListPromptsResult round-trips', () {
-      const result = ListPromptsResult(
-        prompts: [Prompt(name: 'p', arguments: [])],
-      );
-      final json = result.toJson();
-      final decoded = ListPromptsResult.fromJson(json);
-      expect(decoded.prompts.length, 1);
-      expect(decoded.prompts.first.name, 'p');
-    });
-  });
-
-  group('Request/result value objects', () {
-    test('CallToolRequest round-trips with arguments', () {
-      const request = CallToolRequest(name: 't', arguments: {'a': 1});
-      final json = request.toJson();
-      expect(json['arguments'], {'a': 1});
-      final decoded = CallToolRequest.fromJson(json);
-      expect(decoded.name, 't');
-      expect(decoded.arguments, {'a': 1});
-    });
-
-    test('CallToolRequest omits arguments when absent', () {
-      const request = CallToolRequest(name: 't');
-      final json = request.toJson();
-      expect(json.containsKey('arguments'), isFalse);
-    });
-
-    test('ReadResourceRequest round-trips', () {
-      const request = ReadResourceRequest(uri: 'file:///a');
-      final json = request.toJson();
-      expect(json, {'uri': 'file:///a'});
-      final decoded = ReadResourceRequest.fromJson(json);
-      expect(decoded.uri, 'file:///a');
-    });
-
-    test('GetPromptRequest round-trips with arguments', () {
-      const request = GetPromptRequest(name: 'p', arguments: {'x': 'y'});
-      final json = request.toJson();
-      expect(json['arguments'], {'x': 'y'});
-      final decoded = GetPromptRequest.fromJson(json);
-      expect(decoded.name, 'p');
-      expect(decoded.arguments, {'x': 'y'});
-    });
-
-    test('CompletionRequest round-trips with argument', () {
-      const request = CompletionRequest(
-        ref: {'type': 'ref/prompt', 'name': 'p'},
-        argument: {'name': 'x', 'value': 'y'},
-      );
-      final json = request.toJson();
-      expect(json['argument'], {'name': 'x', 'value': 'y'});
-      final decoded = CompletionRequest.fromJson(json);
-      expect(decoded.ref, {'type': 'ref/prompt', 'name': 'p'});
-      expect(decoded.argument, {'name': 'x', 'value': 'y'});
-    });
-
-    test('CompletionResult round-trips', () {
-      const result = CompletionResult(
-        completion: {'values': ['a', 'b']},
-      );
-      final json = result.toJson();
-      final decoded = CompletionResult.fromJson(json);
-      expect(decoded.completion, {'values': ['a', 'b']});
-    });
-  });
-
-  group('Notifications', () {
-    test('LogMessageNotification round-trips with logger and data', () {
-      const notification = LogMessageNotification(
-        level: McpLogLevel.warning,
-        message: 'careful',
-        logger: 'core',
-        data: {'k': 'v'},
-      );
-      final json = notification.toJson();
-      expect(json['level'], 'warning');
-      expect(json['logger'], 'core');
-      expect(json['data'], {'k': 'v'});
-
-      final decoded = LogMessageNotification.fromJson(json);
-      expect(decoded.level, McpLogLevel.warning);
-      expect(decoded.message, 'careful');
-      expect(decoded.logger, 'core');
-      expect(decoded.data, {'k': 'v'});
-    });
-
-    test('CancelRequestNotification round-trips with reason', () {
-      const notification =
-          CancelRequestNotification(requestId: 'r1', reason: 'timeout');
-      final json = notification.toJson();
-      expect(json['reason'], 'timeout');
-      final decoded = CancelRequestNotification.fromJson(json);
-      expect(decoded.requestId, 'r1');
-      expect(decoded.reason, 'timeout');
-    });
-
-    test('CancelRequestNotification omits reason when absent', () {
-      const notification = CancelRequestNotification(requestId: 'r1');
-      final json = notification.toJson();
-      expect(json.containsKey('reason'), isFalse);
-    });
-
-    test('ProgressNotification round-trips with total', () {
-      const notification =
-          ProgressNotification(requestId: 'r1', progress: 0.5, total: 1.0);
-      final json = notification.toJson();
-      expect(json['total'], 1.0);
-      final decoded = ProgressNotification.fromJson(json);
-      expect(decoded.requestId, 'r1');
-      expect(decoded.progress, 0.5);
-      expect(decoded.total, 1.0);
-    });
-
-    test('ProgressNotification omits total when absent', () {
-      const notification = ProgressNotification(requestId: 'r1', progress: 0.5);
-      final json = notification.toJson();
-      expect(json.containsKey('total'), isFalse);
-      final decoded = ProgressNotification.fromJson(json);
-      expect(decoded.total, isNull);
-    });
-  });
-
   group('ToolMetadata equality with matching name', () {
     test('differs when description differs but name matches', () {
       const a = ToolMetadata(name: 'x', description: 'one');
@@ -987,4 +357,5 @@ void main() {
       expect(a, isNot(equals(b)));
     });
   });
+
 }

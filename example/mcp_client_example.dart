@@ -52,7 +52,6 @@ void main() async {
   //   ),
   //   enableCompression: true,
   //   heartbeatInterval: const Duration(seconds: 60),
-  //   useHttp2: true,
   //   maxConcurrentRequests: 20,
   // );
 

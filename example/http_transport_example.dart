@@ -83,7 +83,6 @@ Future<void> exampleConfiguredHttp(Logger logger) async {
     },
     timeout: const Duration(seconds: 45),
     maxConcurrentRequests: 20,
-    useHttp2: true,
   );
 
   final clientResult = await McpClient.createAndConnect(
@@ -130,21 +129,22 @@ Future<void> exampleOAuthHttp(Logger logger) async {
     version: '1.0.0',
   );
 
-  // First, create the transport manually to demonstrate OAuth flow
-  final oauthConfig = OAuthConfig(
-    authorizationEndpoint: 'https://auth.example.com/authorize',
-    tokenEndpoint: 'https://auth.example.com/token',
-    clientId: 'mcp-client-example',
-    clientSecret: 'your-client-secret',
+  // The server's 401 starts discovery, registration and the authorization
+  // code flow; the host shows the user the URL and returns the redirect.
+  final oauth = McpOAuth(McpOAuthOptions(
     redirectUri: 'http://localhost:8080/callback',
-    scopes: ['mcp:read', 'mcp:write'],
-    grantType: OAuthGrantType.clientCredentials,
-  );
+    clientName: 'MCP OAuth example',
+    authorize: (url) async {
+      logger.info('Open $url and sign in');
+      // A real host opens a browser and listens on the redirect URI.
+      throw UnimplementedError('open the browser and return the redirect URI');
+    },
+  ));
 
   try {
     final transport = await StreamableHttpClientTransport.create(
       baseUrl: 'https://oauth-api.example.com',
-      oauthConfig: oauthConfig,
+      oauth: oauth,
       headers: {'User-Agent': 'MCP-OAuth-Client/1.0'},
       maxConcurrentRequests: 10,
     );
@@ -201,7 +201,6 @@ Future<void> exampleCompareTransports(Logger logger) async {
       name: 'HTTP',
       config: TransportConfig.streamableHttp(
         baseUrl: 'http://localhost:8080',
-        useHttp2: false,
       ),
     ),
   ];

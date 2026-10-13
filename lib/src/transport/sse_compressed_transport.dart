@@ -30,6 +30,7 @@ enum CompressionType {
 }
 
 /// SSE Transport with automatic compression support
+@Deprecated('Use SseClientTransport: the HTTP client negotiates compression itself')
 class SseCompressedClientTransport implements ClientTransport {
   final String serverUrl;
   final Map<String, String> _baseHeaders;

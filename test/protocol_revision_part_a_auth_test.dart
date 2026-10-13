@@ -80,12 +80,21 @@ void main() {
       expect(prm.scopesSupported, ['mcp:tools']);
     });
 
-    test('wellKnownProtectedResourceUrl derives the origin fallback', () {
+    test('the well-known metadata URL is tried at the path first, then the root', () {
       final oauth = HttpOAuthClient(config: cfg(), httpClient: MockClient((_) async => http.Response('', 404)));
       expect(
         oauth.wellKnownProtectedResourceUrl('https://api.example.com/mcp').toString(),
-        'https://api.example.com/.well-known/oauth-protected-resource',
+        'https://api.example.com/.well-known/oauth-protected-resource/mcp',
       );
+      expect(protectedResourceMetadataUrls('https://api.example.com/mcp').map((u) => '$u'), [
+        'https://api.example.com/.well-known/oauth-protected-resource/mcp',
+        'https://api.example.com/.well-known/oauth-protected-resource',
+      ]);
+      expect(authorizationServerMetadataUrls('https://as.example.com/tenant1').map((u) => '$u'), [
+        'https://as.example.com/.well-known/oauth-authorization-server/tenant1',
+        'https://as.example.com/.well-known/openid-configuration/tenant1',
+        'https://as.example.com/tenant1/.well-known/openid-configuration',
+      ]);
     });
   });
 
@@ -172,6 +181,7 @@ void main() {
                 'issuer': 'https://as.example.com',
                 'authorization_endpoint': 'https://as.example.com/auth',
                 'token_endpoint': 'https://as.example.com/token',
+                'code_challenge_methods_supported': ['S256'],
               }),
               200,
               headers: {'content-type': 'application/json'},
@@ -233,6 +243,7 @@ void main() {
                 'issuer': 'https://as.example.com',
                 'authorization_endpoint': 'https://as.example.com/auth',
                 'token_endpoint': 'https://as.example.com/token',
+                'code_challenge_methods_supported': ['S256'],
               }),
               200,
               headers: {'content-type': 'application/json'},

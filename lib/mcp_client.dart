@@ -4,14 +4,14 @@ import 'package:logging/logging.dart';
 import 'src/client/client.dart';
 import 'src/transport/transport.dart';
 import 'src/transport/streamable_http_transport.dart';
-import 'src/transport/legacy_sse.dart';
 import 'src/common/result.dart';
 import 'src/models/models.dart';
+import 'src/auth/mcp_oauth.dart';
 import 'src/auth/oauth.dart';
 
 export 'src/models/models.dart';
-export 'src/models/elicitation.dart';
 export 'src/client/client.dart';
+export 'src/client/delegating_client.dart';
 export 'src/transport/transport.dart';
 export 'src/transport/streamable_http_transport.dart';
 export 'src/transport/legacy_sse.dart';
@@ -19,6 +19,7 @@ export 'src/protocol/protocol.dart';
 export 'src/protocol/request_meta.dart';
 export 'src/protocol/multi_round_trip.dart';
 export 'src/protocol/tasks.dart';
+export 'src/auth/mcp_oauth.dart';
 export 'src/auth/oauth.dart';
 export 'src/auth/oauth_client.dart';
 export 'src/auth/oauth_discovery.dart';
@@ -57,6 +58,9 @@ class McpClientConfig {
   /// Whether to enable debug logging
   final bool enableDebugLogging;
 
+  /// Which protocol era to speak ([ProtocolEra.auto] probes the server).
+  final ProtocolEra era;
+
   const McpClientConfig({
     required this.name,
     required this.version,
@@ -67,6 +71,7 @@ class McpClientConfig {
     this.retryDelay = const Duration(seconds: 2),
     this.requestTimeout = const Duration(seconds: 30),
     this.enableDebugLogging = false,
+    this.era = ProtocolEra.auto,
   });
 
   /// Creates a copy of this config with the given fields replaced
@@ -80,6 +85,7 @@ class McpClientConfig {
     Duration? retryDelay,
     Duration? requestTimeout,
     bool? enableDebugLogging,
+    ProtocolEra? era,
   }) {
     return McpClientConfig(
       name: name ?? this.name,
@@ -91,6 +97,7 @@ class McpClientConfig {
       retryDelay: retryDelay ?? this.retryDelay,
       requestTimeout: requestTimeout ?? this.requestTimeout,
       enableDebugLogging: enableDebugLogging ?? this.enableDebugLogging,
+      era: era ?? this.era,
     );
   }
 
@@ -105,7 +112,8 @@ class McpClientConfig {
           maxRetries == other.maxRetries &&
           retryDelay == other.retryDelay &&
           requestTimeout == other.requestTimeout &&
-          enableDebugLogging == other.enableDebugLogging;
+          enableDebugLogging == other.enableDebugLogging &&
+          era == other.era;
 
   @override
   int get hashCode => Object.hash(
@@ -117,6 +125,7 @@ class McpClientConfig {
     retryDelay,
     requestTimeout,
     enableDebugLogging,
+    era,
   );
 
   @override
@@ -129,7 +138,8 @@ class McpClientConfig {
       'maxRetries: $maxRetries, '
       'retryDelay: $retryDelay, '
       'requestTimeout: $requestTimeout, '
-      'enableDebugLogging: $enableDebugLogging)';
+      'enableDebugLogging: $enableDebugLogging, '
+      'era: $era)';
 }
 
 /// Configuration for transport connections
@@ -151,7 +161,6 @@ sealed class TransportConfig {
     Map<String, String>? headers,
     Duration? connectionTimeout,
     Duration? heartbeatInterval,
-    OAuthConfig? oauthConfig,
     OAuthToken? oauthToken,
     String? bearerToken,
     bool enableCompression,
@@ -168,7 +177,7 @@ sealed class TransportConfig {
     Duration? timeout,
     int? maxConcurrentRequests,
     bool? useHttp2,
-    OAuthConfig? oauthConfig,
+    McpOAuth? oauth,
     bool enableCompression,
     Duration? heartbeatInterval,
     int maxMissedHeartbeats,
@@ -195,15 +204,34 @@ final class StdioTransportConfig extends TransportConfig {
 final class SseTransportConfig extends TransportConfig {
   final String serverUrl;
   final Map<String, String>? headers;
+
+  /// How long opening the event stream may take.
   final Duration? connectionTimeout;
+
+  /// Ping the server at this interval once connected
+  /// ([Client.startKeepAlive]); [maxMissedHeartbeats] unanswered pings in a
+  /// row end the connection.
   final Duration? heartbeatInterval;
-  final OAuthConfig? oauthConfig;
+
+  /// A token sent as `Authorization: Bearer` (HTTP+SSE has no authorization
+  /// flow of its own; use Streamable HTTP with `oauth:` for one).
   final OAuthToken? oauthToken;
+
+  /// As [oauthToken], given as the token string.
   final String? bearerToken;
+
+  /// No effect: responses are decompressed by the HTTP client, which asks
+  /// for gzip itself. Kept so 2.x calls compile.
+  @Deprecated('No effect: the HTTP client negotiates compression itself')
   final bool enableCompression;
+  @Deprecated('No effect: the HTTP client negotiates compression itself')
   final bool enableGzip;
+  @Deprecated('No effect: the HTTP client negotiates compression itself')
   final bool enableDeflate;
+  @Deprecated('No effect: the HTTP client negotiates compression itself')
   final int compressionLevel;
+
+  /// Unanswered heartbeat pings in a row that end the connection.
   final int maxMissedHeartbeats;
 
   const SseTransportConfig({
@@ -211,7 +239,6 @@ final class SseTransportConfig extends TransportConfig {
     this.headers,
     this.connectionTimeout,
     this.heartbeatInterval,
-    this.oauthConfig,
     this.oauthToken,
     this.bearerToken,
     this.enableCompression = false,
@@ -227,12 +254,31 @@ final class StreamableHttpTransportConfig extends TransportConfig {
   final String baseUrl;
   final Map<String, String>? headers;
   final Duration? timeout;
+
+  /// Requests in flight at once; more wait their turn.
   final int? maxConcurrentRequests;
+
+  /// No effect: the HTTP client speaks HTTP/1.1. Kept so 2.x calls compile.
+  @Deprecated('No effect: the HTTP client speaks HTTP/1.1')
   final bool? useHttp2;
-  final OAuthConfig? oauthConfig;
+
+  /// MCP authorization: discovery, registration and tokens (see [McpOAuth]).
+  final McpOAuth? oauth;
+
+  /// No effect: responses are decompressed by the HTTP client, which asks
+  /// for gzip itself. Kept so 2.x calls compile.
+  @Deprecated('No effect: the HTTP client negotiates compression itself')
   final bool enableCompression;
+
+  /// Ping the server at this interval once connected, on revisions that have
+  /// `ping` ([Client.startKeepAlive]); [maxMissedHeartbeats] unanswered pings
+  /// in a row end the connection.
   final Duration? heartbeatInterval;
+
+  /// Unanswered heartbeat pings in a row that end the connection.
   final int maxMissedHeartbeats;
+
+  /// Send `DELETE` to end the session when disconnecting.
   final bool terminateOnClose;
 
   const StreamableHttpTransportConfig({
@@ -241,7 +287,7 @@ final class StreamableHttpTransportConfig extends TransportConfig {
     this.timeout,
     this.maxConcurrentRequests,
     this.useHttp2,
-    this.oauthConfig,
+    this.oauth,
     this.enableCompression = false,
     this.heartbeatInterval,
     this.maxMissedHeartbeats = 3,
@@ -268,6 +314,7 @@ class McpClient {
       description: config.description,
       capabilities: config.capabilities,
       protocolVersion: config.protocolVersion,
+      requestTimeout: config.requestTimeout,
     );
   }
 
@@ -278,13 +325,24 @@ class McpClient {
   }) async {
     return Results.catchingAsync(() async {
       final client = createClient(config);
-      final transport = await _createTransport(transportConfig);
-
       await client.connectWithRetry(
-        transport,
+        () => _createTransport(transportConfig),
         maxRetries: config.maxRetries,
         delay: config.retryDelay,
+        era: config.era,
       );
+      // Heartbeat: the specification's connection health check is `ping`
+      // (none exists in 2026-07-28, which has no connection to keep).
+      final (interval, maxMissed) = switch (transportConfig) {
+        SseTransportConfig(:final heartbeatInterval, :final maxMissedHeartbeats) =>
+          (heartbeatInterval, maxMissedHeartbeats),
+        StreamableHttpTransportConfig(:final heartbeatInterval, :final maxMissedHeartbeats) =>
+          (heartbeatInterval, maxMissedHeartbeats),
+        StdioTransportConfig() => (null, 0),
+      };
+      if (interval != null && !client.isStateless) {
+        client.startKeepAlive(interval, timeout: interval, maxMissed: maxMissed < 1 ? 1 : maxMissed);
+      }
 
       return client;
     });
@@ -308,22 +366,15 @@ class McpClient {
       SseTransportConfig(
         serverUrl: final serverUrl,
         headers: final headers,
-        oauthConfig: final oauthConfig,
         oauthToken: final oauthToken,
         bearerToken: final bearerToken,
-        enableCompression: final enableCompression,
-        heartbeatInterval: final heartbeatInterval,
-        maxMissedHeartbeats: final maxMissedHeartbeats,
+        connectionTimeout: final connectionTimeout,
       ) =>
-        _createUnifiedSseTransport(
+        _createSseTransport(
           serverUrl: serverUrl,
           headers: headers,
-          oauthConfig: oauthConfig,
-          oauthToken: oauthToken,
-          bearerToken: bearerToken,
-          enableCompression: enableCompression,
-          heartbeatInterval: heartbeatInterval,
-          maxMissedHeartbeats: maxMissedHeartbeats,
+          token: bearerToken ?? oauthToken?.accessToken,
+          connectionTimeout: connectionTimeout,
         ),
       StreamableHttpTransportConfig(
         baseUrl: final baseUrl,
@@ -331,7 +382,7 @@ class McpClient {
         timeout: final timeout,
         maxConcurrentRequests: final maxConcurrentRequests,
         useHttp2: final useHttp2,
-        oauthConfig: final oauthConfig,
+        oauth: final oauth,
         enableCompression: final _,
         heartbeatInterval: final _,
         maxMissedHeartbeats: final _,
@@ -343,56 +394,28 @@ class McpClient {
           timeout: timeout,
           maxConcurrentRequests: maxConcurrentRequests,
           useHttp2: useHttp2,
-          oauthConfig: oauthConfig,
+          oauth: oauth,
           terminateOnClose: terminateOnClose,
         ),
     };
   }
 
-  /// Create a unified SSE transport with all features
-  static Future<ClientTransport> _createUnifiedSseTransport({
+  /// The HTTP+SSE transport, with the bearer [token] (when given) on the
+  /// stream and on every message POST.
+  static Future<ClientTransport> _createSseTransport({
     required String serverUrl,
     Map<String, String>? headers,
-    OAuthConfig? oauthConfig,
-    OAuthToken? oauthToken,
-    String? bearerToken,
-    bool enableCompression = false,
-    Duration? heartbeatInterval,
-    int maxMissedHeartbeats = 3,
-  }) async {
-    // Determine which SSE transport to use based on features
-    if (oauthConfig != null || oauthToken != null || bearerToken != null) {
-      // Use OAuth-enabled SSE transport
-      return await SseAuthClientTransport.create(
-        serverUrl: serverUrl,
-        headers: headers,
-        oauthToken: oauthToken,
-        bearerToken: bearerToken,
-      );
-    } else if (enableCompression) {
-      // Use compression-enabled SSE transport
-      return await SseCompressedClientTransport.create(
-        serverUrl: serverUrl,
-        headers: headers,
-        supportedCompressions: [CompressionType.gzip, CompressionType.deflate],
-      );
-    } else if (heartbeatInterval != null) {
-      // Use heartbeat-enabled SSE transport
-      return await SseHeartbeatClientTransport.create(
-        serverUrl: serverUrl,
-        headers: headers,
-        heartbeatConfig: HeartbeatConfig(
-          interval: heartbeatInterval,
-          maxMissedBeats: maxMissedHeartbeats,
-        ),
-      );
-    } else {
-      // Use basic SSE transport
-      return await SseClientTransport.create(
-        serverUrl: serverUrl,
-        headers: headers,
-      );
-    }
+    String? token,
+    Duration? connectionTimeout,
+  }) {
+    final opening = SseClientTransport.create(
+      serverUrl: serverUrl,
+      headers: {
+        ...?headers,
+        if (token != null) 'Authorization': 'Bearer $token',
+      },
+    );
+    return connectionTimeout == null ? opening : opening.timeout(connectionTimeout);
   }
 
   /// Create a stdio transport with the given configuration

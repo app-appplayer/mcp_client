@@ -4,10 +4,11 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
 
 ## Features
 
-- **Multi-revision MCP support** with per-version capability negotiation — see _Protocol Versions_ below.
-  The revision is chosen per client (`McpClientConfig.protocolVersion`), not fixed at build time
+- **Every MCP revision**, 2024-11-05 through 2026-07-28, plus the 2026-07-28
+  tasks extension — see _Protocol Versions_ below. `connect` picks the
+  revision with the server (`ProtocolEra.auto`)
 - **Unified transport configuration** — sealed `TransportConfig` for stdio / SSE / Streamable HTTP
-- **OAuth 2.1** — built-in authorization for secure HTTP transports
+- **OAuth 2.1** — the specification's authorization flow (`McpOAuth`): discovery, registration, PKCE, `resource`, `iss` checks, step-up
 - **Result-typed error handling** — `Result<Client, Error>` from `createAndConnect`, plus `McpError` for spec error codes
 - **Core MCP primitives**:
   - **Resources** — server data, URI templates, subscriptions
@@ -16,7 +17,8 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
   - **Completion** — `complete(ref, argument)` for `completion/complete` argument suggestions
   - **Roots** — filesystem boundary configuration; the server requests them via `roots/list`
   - **Sampling** — register a host LLM completion handler so the server can drive `sampling/createMessage`
-  - **Elicitation** (2025-06-18) — register a user-input handler so the server can collect structured prompts
+  - **Elicitation** (2025-06-18) — register a user-input handler so the server can collect structured input (form and URL modes)
+  - **Tasks** (2025-11-25) — `callToolAsTask`, `getTask`, `taskResult`, `cancelTask`
 - **Advanced**:
   - **Deferred Tool Loading** — lightweight metadata + on-demand schema fetch (60–80% token reduction)
   - **Progress notifications** — outbound `notifications/progress` and inbound listener
@@ -24,27 +26,50 @@ A Dart plugin for implementing [Model Context Protocol (MCP)](https://modelconte
   - **Resource subscriptions** — `notifications/resources/updated`
   - **Session management** — automatic session validation and reconnection support
   - **Ping** — `ping()` probes the peer, and an inbound `ping` is answered automatically
-- **Cross-platform**: Android, iOS, web, Linux, Windows, macOS (web supports SSE + Streamable HTTP; stdio is native-only)
+- **Cross-platform**: Android, iOS, web, Linux, Windows, macOS (on the web, Streamable HTTP; stdio and HTTP+SSE need `dart:io`)
 
 ## Protocol Versions
 
-Implements the Model Context Protocol specification across **four** revisions, with the negotiated version determining which features are advertised and which dispatch paths are taken.
+Implements every revision of the Model Context Protocol; the one in use is
+agreed with each server.
 
 | Version | Notes |
 |---|---|
-| `2024-11-05` | Original; JSON-RPC batching available |
-| `2025-03-26` | Earlier 2025 revision; JSON-RPC batching available |
-| `2025-06-18` | Adds elicitation, structured tool output, resource links, OAuth Resource Server, MCP-Protocol-Version header. Removes JSON-RPC batching |
-| `2025-11-25` | Adds icons, sampling tool calling (`tools` / `toolChoice`), URL-mode elicitation, OIDC Discovery, Client ID Metadata Documents |
+| `2024-11-05` | Original; HTTP+SSE transport |
+| `2025-03-26` | Streamable HTTP, authorization, JSON-RPC batches |
+| `2025-06-18` | Elicitation, structured tool output, resource links, `MCP-Protocol-Version` header; batches removed |
+| `2025-11-25` | Icons, sampling with tools, URL elicitation, tasks, OIDC discovery, Client ID Metadata Documents |
+| `2026-07-28` | Stateless: no handshake, `server/discover`, per-request `_meta`, `subscriptions/listen`, multi round-trip requests, caching hints; tasks extension |
 
-`2026-07-28` is published and is the current specification revision. This build
-does not negotiate it — it is absent from `McpProtocol.supportedVersions`, so a
-peer is never offered it. The reference TypeScript SDK (1.30.0) does not
-implement it either. The versions in the table are what this build speaks.
+`connect(transport)` (`ProtocolEra.auto`) asks the server with
+`server/discover` and speaks 2026-07-28 when it answers, otherwise the
+`initialize` handshake negotiates the newest revision both support.
+`ProtocolEra.modern` / `.legacy` force one side; `negotiatedProtocolVersion`
+reports the result.
 
-Runtime gates: `McpProtocol.supportsBatching(v)` / `supportsElicitation(v)` / `supportsStructuredToolOutput(v)` / `supportsIconsAndSamplingTools(v)` / `requiresProtocolHeader(v)`.
+Runtime gates: `McpProtocol.isStateless(v)` / `supportsBatching(v)` /
+`supportsElicitation(v)` / `supportsUrlElicitation(v)` /
+`supportsSamplingTools(v)` / `requiresProtocolHeader(v)`.
 
-For details, see the [Model Context Protocol specification](https://spec.modelcontextprotocol.io).
+Coming from 2.x: [MIGRATION-3.0.md](MIGRATION-3.0.md).
+
+## JSON Schema
+
+`JsonSchemaValidator` (exported by this package) evaluates the schemas MCP
+carries — tool `inputSchema` / `outputSchema`, elicitation `requestedSchema`.
+
+- Dialects: **2020-12** (used when a schema has no `$schema`), 2019-09,
+  draft-07, draft-06, draft-04. A schema naming another dialect is refused
+  with `JsonSchemaException`.
+- References resolve inside the schema, against documents passed in
+  `registry`, and against the bundled meta-schemas. Nothing is fetched over
+  the network; a reference that does not resolve rejects the schema.
+- Evaluation is bounded (`JsonSchemaLimits`: depth, subschema count,
+  evaluations, time).
+- `format` is an annotation unless `assertFormat: true`, which checks
+  `email`, `uri`, `date` and `date-time`.
+- Conformance: the official JSON-Schema-Test-Suite (required tests of all
+  five dialects, plus the optional tests for the features above).
 
 ## Getting Started
 
@@ -129,7 +154,7 @@ Monitor the connection state with event streams:
 // Listen for connection events
 client.onConnect.listen((serverInfo) {
   _logger.info('Connected to ${serverInfo.name} v${serverInfo.version}');
-  _logger.info('Protocol version: ${serverInfo.protocolVersion}');
+  _logger.info('Protocol version: ${client.negotiatedProtocolVersion}');
   // Initialize your application after connection
 });
 
@@ -147,6 +172,12 @@ client.onDisconnect.listen((reason) {
       break;
     case DisconnectReason.clientDisconnected:
       // Normal shutdown
+      break;
+    case DisconnectReason.transportClosed:
+    case DisconnectReason.pingTimeout:
+    case DisconnectReason.sessionExpired:
+    case DisconnectReason.unknown:
+      // Connection ended; reconnect if the application needs it
       break;
   }
 });
@@ -207,15 +238,19 @@ final result = await client.callTool('search-web', {
   'maxResults': 5,
 });
 
-// Call a tool with progress tracking
-final trackingResult = await client.callToolWithTracking('long-running-operation', {
-  'parameter': 'value'
-});
-final operationId = trackingResult.operationId;
+// Per-call progress, timeout and cancellation
+final cancel = Completer<Object?>();
+final longResult = client.callTool('long-running-operation', {'parameter': 'value'},
+    options: RequestOptions(
+      timeout: const Duration(minutes: 5),
+      onProgress: (p) => _logger.debug('progress ${p.progress}/${p.total ?? '?'} ${p.message ?? ''}'),
+      cancel: cancel.future, // completing it sends notifications/cancelled
+    ));
+// cancel.complete('user requested');
 
-// Listen to inbound progress notifications from the server
-client.onProgress((requestId, progress, message) {
-  _logger.debug('Operation $requestId: $progress% - $message');
+// Or one handler for every progress notification
+client.onProgress((progressToken, progress, message) {
+  _logger.debug('Operation $progressToken: $progress - $message');
 });
 
 // Process the result
@@ -223,9 +258,6 @@ final content = result.content.first;
 if (content is TextContent) {
   _logger.debug('Search results: ${content.text}');
 }
-
-// Cancel an in-flight request — emits the spec `notifications/cancelled`
-client.notifyCancelled(operationId, reason: 'user requested');
 ```
 
 ### Prompts
@@ -261,7 +293,6 @@ Roots scope the filesystem the server is allowed to operate on. Per spec, the se
 client.addRoot(Root(
   uri: 'file:///path/to/allowed/directory',
   name: 'Project Files',
-  description: 'Files for the current project',
 ));
 
 // Inspect the locally-configured roots
@@ -271,12 +302,12 @@ _logger.debug('Configured roots: ${client.roots.map((r) => r.name).join(', ')}')
 client.removeRoot('file:///path/to/allowed/directory');
 
 // Override the default `roots/list` response handler if you need custom behavior
-client.onListRoots((req) async => ListRootsResult(roots: client.roots));
+client.onListRoots(() async => client.roots);
 ```
 
 ### Sampling
 
-Sampling is **server-initiated** per the MCP spec. Register a handler that fulfils completion requests using your host LLM:
+Sampling is **server-initiated** per the MCP spec. Declare it (`ClientCapabilities(sampling: true)`, for example through `McpClient.productionConfig(capabilities: ...)`) and register a handler that fulfils completion requests using your host LLM; without the declaration the client refuses the request:
 
 ```dart
 client.onSamplingRequest((request) async {
@@ -284,26 +315,27 @@ client.onSamplingRequest((request) async {
   final reply = await myLlm.complete(request.messages);
   return CreateMessageResult(
     model: reply.model,
-    role: 'assistant',
-    content: TextContent(text: reply.text),
+    role: Role.assistant,
+    content: [TextContent(text: reply.text)],
   );
 });
 ```
 
 ### Elicitation (2025-06-18)
 
-The server can request structured input from the user via `elicitation/create`. Register a handler:
+The server can request structured input from the user via `elicitation/create`. Declare `elicitation` (or `elicitationForm` / `elicitationUrl`) in `ClientCapabilities` and register a handler:
 
 ```dart
-client.onElicitationRequest((request) async {
-  final answers = await ui.promptUser(request.message, schema: request.requestedSchema);
-  return ElicitResult(action: 'accept', content: answers);
+client.onElicitationRequestTyped((request) async {
+  final form = request as ElicitRequestFormParams; // or ElicitRequestURLParams
+  final answers = await ui.promptUser(form.message, schema: form.requestedSchema);
+  return ElicitResult(action: ElicitResultAction.accept, content: answers);
 });
 ```
 
 ## Transport Layers
 
-MCP Client supports multiple transport types with unified configuration. Each transport automatically supports advanced features like OAuth authentication, compression, and heartbeat monitoring.
+MCP Client supports stdio, HTTP+SSE (2024-11-05) and Streamable HTTP with one configuration type. HTTP responses are decompressed by the HTTP client itself; `heartbeatInterval` pings the server and ends a connection that stops answering.
 
 ### Standard I/O
 
@@ -351,25 +383,15 @@ final transportConfig = TransportConfig.sse(
   headers: {'User-Agent': 'MCP-Client/1.0'},
 );
 
-// SSE with OAuth authentication
+// SSE with an OAuth access token obtained elsewhere (HTTP+SSE, 2024-11-05,
+// has no authorization flow of its own)
 final transportConfig = TransportConfig.sse(
   serverUrl: 'https://api.example.com/sse',
-  oauthConfig: OAuthConfig(
-    authorizationEndpoint: 'https://auth.example.com/authorize',
-    tokenEndpoint: 'https://auth.example.com/token',
-    clientId: 'your-client-id',
-  ),
+  oauthToken: token,
 );
 
-// SSE with compression
-final transportConfig = TransportConfig.sse(
-  serverUrl: 'http://localhost:8080/sse',
-  enableCompression: true,
-  enableGzip: true,
-  enableDeflate: true,
-);
-
-// SSE with heartbeat monitoring
+// SSE with a heartbeat: a ping every 30 s; three unanswered in a row end
+// the connection
 final transportConfig = TransportConfig.sse(
   serverUrl: 'http://localhost:8080/sse',
   heartbeatInterval: const Duration(seconds: 30),
@@ -384,7 +406,7 @@ final clientResult = await McpClient.createAndConnect(
 
 ### Streamable HTTP Transport
 
-For high-performance HTTP/2 communication:
+The current HTTP transport (2025-03-26 and later, required for 2026-07-28):
 
 ```dart
 // Basic HTTP transport
@@ -399,13 +421,12 @@ final transportConfig = TransportConfig.streamableHttp(
   headers: {'User-Agent': 'MCP-Client/1.0'},
   timeout: const Duration(seconds: 60),
   maxConcurrentRequests: 20,
-  useHttp2: true,
-  oauthConfig: OAuthConfig(
-    authorizationEndpoint: 'https://auth.example.com/authorize',
-    tokenEndpoint: 'https://auth.example.com/token',
-    clientId: 'your-client-id',
-  ),
-  enableCompression: true,
+  // MCP authorization: a 401 starts discovery, registration and the
+  // authorization code flow; see MIGRATION-3.0.md.
+  oauth: McpOAuth(McpOAuthOptions(
+    redirectUri: 'http://localhost:8765/callback',
+    authorize: (url) => openBrowserAndWaitForRedirect(url),
+  )),
   heartbeatInterval: const Duration(seconds: 60),
 );
 
@@ -568,6 +589,25 @@ try {
   print('MCP error (${e.code}): ${e.message}');
 } catch (e) {
   print('Unexpected error: $e');
+}
+```
+
+### Wrapping a Client
+
+`DelegatingClient` forwards every member to the client it wraps; extend it
+and override what you change:
+
+```dart
+class CountingClient extends DelegatingClient {
+  CountingClient(super.inner);
+  int calls = 0;
+
+  @override
+  Future<CallToolResult> callTool(String name, Map<String, dynamic> toolArguments,
+      {Map<String, dynamic>? meta, RequestOptions? options}) {
+    calls++;
+    return super.callTool(name, toolArguments, meta: meta, options: options);
+  }
 }
 ```
 

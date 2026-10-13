@@ -50,7 +50,7 @@ void main() {
       });
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // Verify that initialization message was sent
       expect(
@@ -76,7 +76,7 @@ void main() {
       expect(client.serverCapabilities?.tools, isTrue);
       expect(client.serverCapabilities?.resources, isTrue);
       expect(client.serverCapabilities?.prompts, isTrue);
-      expect(client.serverCapabilities?.sampling, isTrue);
+      // `sampling` is a client capability; a server does not advertise it.
 
       // Verify server info
       expect(client.serverInfo?['name'], equals('Mock Server'));
@@ -95,7 +95,7 @@ void main() {
       });
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // Client should accept older protocol version
       expect(client.isConnected, isTrue);
@@ -145,7 +145,7 @@ void main() {
       });
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // List tools
       final tools = await client.listTools();
@@ -163,8 +163,9 @@ void main() {
       // Verify enhanced tool features
       expect(tools.length, equals(1));
       expect(tools[0].name, equals('calculator'));
-      expect(tools[0].supportsProgress, isTrue);
-      expect(tools[0].supportsCancellation, isTrue);
+      // Keys outside the schema the server sent are kept, not dropped.
+      expect(tools[0].extra['supportsProgress'], isTrue);
+      expect(tools[0].extra['supportsCancellation'], isTrue);
     });
 
     test('Client can call tool with progress tracking', () async {
@@ -193,7 +194,7 @@ void main() {
       });
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // Call tool with tracking
       final tracking = await client.callToolWithTracking('long-running-tool', {
@@ -243,16 +244,18 @@ void main() {
             },
             {
               'type': 'resource',
-              'uri': 'file:///test.txt',
-              'mimeType': 'text/plain',
-              'text': 'Resource content',
+              'resource': {
+                'uri': 'file:///test.txt',
+                'mimeType': 'text/plain',
+                'text': 'Resource content',
+              },
             },
           ],
         },
       });
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // Call tool
       final result = await client.callTool('content-test', {});
@@ -272,9 +275,9 @@ void main() {
       expect(imageContent.annotations?['alt'], equals('Test image'));
 
       // Resource content
-      final resourceContent = result.content[2] as ResourceContent;
-      expect(resourceContent.uri, equals('file:///test.txt'));
-      expect(resourceContent.text, equals('Resource content'));
+      final resourceContent = result.content[2] as EmbeddedResource;
+      expect(resourceContent.resource.uri, equals('file:///test.txt'));
+      expect(resourceContent.resource.text, equals('Resource content'));
     });
 
     test('Client cancels via spec notifications/cancelled (no id)',
@@ -293,18 +296,20 @@ void main() {
       });
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
-      // Cancel an in-flight server-side request via the spec notification.
-      client.notifyCancelled('op-123', reason: 'user aborted');
+      // Cancel an in-flight request via the spec notification.
+      final call = client.listTools();
+      final requestId = mockTransport.sentMessages.last['id'];
+      client.notifyCancelled(requestId, reason: 'user aborted');
+      await expectLater(call, throwsA(isA<McpError>()));
 
       // Verify cancellation NOTIFICATION was sent (no id, no result expected).
-      expect(mockTransport.sentMessages.length, 3);
-      final cancelMsg = mockTransport.sentMessages[2];
+      final cancelMsg = mockTransport.sentMessages.last;
       expect(cancelMsg['method'], equals('notifications/cancelled'));
       expect(cancelMsg.containsKey('id'), isFalse,
           reason: 'cancellation is a notification, not a request');
-      expect(cancelMsg['params']['requestId'], equals('op-123'));
+      expect(cancelMsg['params']['requestId'], equals(requestId));
       expect(cancelMsg['params']['reason'], equals('user aborted'));
     });
 
@@ -321,37 +326,29 @@ void main() {
       });
 
       // Prepare to listen for progress
-      final progressReceived = Completer<bool>();
-      String? receivedRequestId;
-      double? receivedProgress;
-      String? receivedMessage;
-
-      client.onProgress((requestId, progress, message) {
-        receivedRequestId = requestId;
-        receivedProgress = progress;
-        receivedMessage = message;
-        progressReceived.complete(true);
-      });
+      final progressReceived = Completer<ProgressNotificationParams>();
+      client.onProgressNotification(progressReceived.complete);
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
-      // Send mock progress notification
+      // Send a spec-shaped progress notification (token, progress, message).
       mockTransport.sendMockNotification({
         'jsonrpc': McpProtocol.jsonRpcVersion,
         'method': McpProtocol.methodProgress,
         'params': {
-          'requestId': 'req-123',
-          'progress': 0.75,
+          'progressToken': 'tok-123',
+          'progress': 3,
+          'total': 4,
           'message': '75% complete',
         },
       });
 
-      // Verify progress notification was received
-      await progressReceived.future.timeout(const Duration(seconds: 1));
-      expect(receivedRequestId, equals('req-123'));
-      expect(receivedProgress, equals(0.75));
-      expect(receivedMessage, equals('75% complete'));
+      final p = await progressReceived.future.timeout(const Duration(seconds: 1));
+      expect(p.progressToken, 'tok-123');
+      expect(p.progress, 3);
+      expect(p.total, 4);
+      expect(p.message, '75% complete');
     });
 
     test('Client handles resource subscriptions', () async {
@@ -375,7 +372,7 @@ void main() {
       });
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // Subscribe to resource
       await client.subscribeResource('file:///test.txt');
@@ -407,7 +404,7 @@ void main() {
       // Prepare to listen for resource updates
       final updateReceived = Completer<bool>();
       String? receivedUri;
-      ResourceContentInfo? receivedContent;
+      ResourceContents? receivedContent;
 
       client.onResourceContentUpdated((uri, content) {
         receivedUri = uri;
@@ -416,7 +413,7 @@ void main() {
       });
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // Send mock resource update notification
       mockTransport.sendMockNotification({
@@ -460,7 +457,7 @@ void main() {
       });
 
       // Connect to mock transport
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // Call unknown tool and expect error
       try {
@@ -476,6 +473,12 @@ void main() {
 
     test('Client handles server-initiated sampling/createMessage request',
         () async {
+      // Answering sampling requires declaring the sampling capability.
+      client = Client(
+        name: 'Test Client',
+        version: '1.0.0',
+        capabilities: const ClientCapabilities(sampling: true),
+      );
       // Setup mock initialize response
       mockTransport.queueResponse({
         'jsonrpc': McpProtocol.jsonRpcVersion,
@@ -487,18 +490,18 @@ void main() {
         },
       });
 
-      CreateMessageRequest? receivedRequest;
+      CreateMessageRequestParams? receivedRequest;
       client.onSamplingRequest((request) async {
         receivedRequest = request;
         return CreateMessageResult(
-          role: 'assistant',
-          content: const TextContent(text: 'Hello! How can I help you?'),
+          role: Role.assistant,
+          content: [TextContent(text: 'Hello! How can I help you?')],
           model: 'test-model',
-          stopReason: 'end_turn',
+          stopReason: 'endTurn',
         );
       });
 
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // Server pushes a sampling/createMessage request to the client.
       mockTransport.simulateMessage({
@@ -598,15 +601,11 @@ void main() {
     });
 
     test('Unified transport configuration - HTTP with all features', () async {
-      final oauthConfig = OAuthConfig(
-        authorizationEndpoint: 'https://auth.example.com/authorize',
-        tokenEndpoint: 'https://auth.example.com/token',
-        clientId: 'test-client',
-      );
+      final oauth = McpOAuth(McpOAuthOptions(redirectUri: 'http://localhost:8765/callback'));
 
       final transportConfig = TransportConfig.streamableHttp(
         baseUrl: 'https://api.example.com',
-        oauthConfig: oauthConfig,
+        oauth: oauth,
         enableCompression: true,
         heartbeatInterval: const Duration(seconds: 60),
         useHttp2: true,
@@ -617,7 +616,7 @@ void main() {
       expect(transportConfig, isA<StreamableHttpTransportConfig>());
       final httpConfig = transportConfig as StreamableHttpTransportConfig;
       expect(httpConfig.baseUrl, equals('https://api.example.com'));
-      expect(httpConfig.oauthConfig, equals(oauthConfig));
+      expect(httpConfig.oauth, same(oauth));
       expect(httpConfig.enableCompression, isTrue);
       expect(httpConfig.heartbeatInterval, equals(const Duration(seconds: 60)));
       expect(httpConfig.useHttp2, isTrue);
@@ -639,8 +638,9 @@ void main() {
       expect(sseConfig.enableCompression, isTrue);
       expect(sseConfig.heartbeatInterval, equals(const Duration(seconds: 30)));
 
-      // When createAndConnect is called, it should use SseAuthClientTransport
-      // due to OAuth taking priority in _createUnifiedSseTransport
+      // createAndConnect opens SseClientTransport with the token as an
+      // Authorization header and starts ping keep-alive at the interval
+      // (test/sse_config_and_keepalive_test.dart).
     });
 
     test('Client event streams work correctly', () async {
@@ -665,7 +665,7 @@ void main() {
       });
 
       // Connect
-      await client.connect(mockTransport);
+      await client.connect(mockTransport, era: ProtocolEra.legacy);
 
       // Wait for async events to propagate
       await Future.delayed(const Duration(milliseconds: 10));
@@ -676,7 +676,7 @@ void main() {
       // Negotiated version is whatever the mock server advertised
       // (test default = v2025_03_26 in this fixture, but the assertion
       // is just that the field was populated).
-      expect(connectEvents[0].protocolVersion, isNotEmpty);
+      expect(client.negotiatedProtocolVersion, isNotEmpty);
 
       // Disconnect
       client.disconnect();

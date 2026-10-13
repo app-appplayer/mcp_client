@@ -70,7 +70,7 @@ void main() {
                     'method': 'elicitation/create',
                     'params': {
                       'message': 'name?',
-                      'requestedSchema': {'type': 'object'},
+                      'requestedSchema': {'type': 'object', 'properties': <String, dynamic>{}},
                     },
                   },
                 },
@@ -98,8 +98,8 @@ void main() {
         ];
       });
 
-      final client = Client(name: 'c', version: '1.0.0');
-      await client.connect(transport, statelessMode: true);
+      final client = Client(name: 'c', version: '1.0.0', capabilities: const ClientCapabilities(elicitation: true));
+      await client.connect(transport, era: ProtocolEra.modern);
       var elicited = 0;
       client.onElicitationRequest((params) async {
         elicited++;
@@ -135,7 +135,7 @@ void main() {
         ];
       });
       final client = Client(name: 'c', version: '1.0.0');
-      await client.connect(transport, statelessMode: true);
+      await client.connect(transport, era: ProtocolEra.modern);
       // No elicitation handler — a missing resultType MUST NOT trigger MRTR.
       final result = await client.callTool('t', {});
       expect((result.content.first as TextContent).text, 'ok');
@@ -190,11 +190,11 @@ void main() {
       });
 
       final client = Client(name: 'c', version: '1.0.0');
-      await client.connect(transport, statelessMode: true);
+      await client.connect(transport, era: ProtocolEra.modern);
 
       final received = <SubscriptionNotification>[];
       final sub = await client.listen(
-          const SubscriptionFilter(resourcesListChanged: true));
+          SubscriptionFilter(resourcesListChanged: true));
       final done = Completer<void>();
       sub.notifications.listen(received.add, onDone: done.complete);
 
@@ -217,7 +217,7 @@ void main() {
 
   group('R2 client — model round-trips', () {
     test('SubscriptionFilter toJson emits only set fields', () {
-      const f = SubscriptionFilter(
+      final f = SubscriptionFilter(
         toolsListChanged: true,
         resourceSubscriptions: ['file:///a'],
       );
@@ -236,7 +236,7 @@ void main() {
         'requestState': 's',
       });
       expect(r.requestState, 's');
-      expect(r.inputRequests['k']!['method'], 'roots/list');
+      expect(r.inputRequests!['k'], isA<ListRootsRequest>());
     });
 
     test('McpResultType.of defaults to complete when absent', () {

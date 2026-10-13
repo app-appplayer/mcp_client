@@ -7,6 +7,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
+import 'mcp_oauth.dart';
 import 'oauth.dart';
 import 'oauth_discovery.dart';
 
@@ -49,10 +50,12 @@ class HttpOAuthClient implements OAuthClient {
 
     if (config.authServerMetadataUrl == null) {
       // Create metadata from config
+      // Endpoints the host configured itself; it vouches for PKCE.
       _metadata = AuthServerMetadata(
         issuer: Uri.parse(config.authorizationEndpoint).origin,
         authorizationEndpoint: config.authorizationEndpoint,
         tokenEndpoint: config.tokenEndpoint,
+        codeChallengeMethodsSupported: [config.codeChallengeMethod],
       );
       return _metadata!;
     }
@@ -88,17 +91,17 @@ class HttpOAuthClient implements OAuthClient {
   WwwAuthenticateChallenge? parseWwwAuthenticate(String? header) =>
       WwwAuthenticateChallenge.parse(header);
 
-  /// Derive the RFC 9728 well-known PRM URL for a resource origin, used as the
-  /// fallback when a `401` carries no `resource_metadata=` param (SEP-985).
-  ///
-  /// `https://api.example.com/mcp` → `https://api.example.com/.well-known/
-  /// oauth-protected-resource`. The well-known segment is inserted at the
-  /// origin per RFC 9728 §3.1.
-  Uri wellKnownProtectedResourceUrl(String resourceUrl) {
-    final uri = Uri.parse(resourceUrl);
-    return Uri.parse(
-        '${uri.origin}/.well-known/oauth-protected-resource');
-  }
+  /// The RFC 9728 well-known PRM URL tried first when a `401` carries no
+  /// `resource_metadata=`: at the resource's path
+  /// (`https://api.example.com/.well-known/oauth-protected-resource/mcp`);
+  /// the root follows (see [protectedResourceMetadataUrls]).
+  Uri wellKnownProtectedResourceUrl(String resourceUrl) =>
+      protectedResourceMetadataUrls(resourceUrl).first;
+
+  /// The MCP server the tokens are for (RFC 8707 `resource`): the
+  /// configured one, else the one discovery found.
+  String? get resource => config.resource ?? _resource;
+  String? _resource;
 
   /// Fetch and parse an RFC 9728 Protected Resource Metadata document.
   Future<ProtectedResourceMetadata> fetchProtectedResourceMetadata(
@@ -119,57 +122,43 @@ class HttpOAuthClient implements OAuthClient {
     return ProtectedResourceMetadata.fromJson(json);
   }
 
-  /// Discover authorization-server metadata for an issuer/AS identifier,
-  /// trying BOTH RFC 8414 (`/.well-known/oauth-authorization-server`) and
-  /// OpenID Connect Discovery 1.0 (`/.well-known/openid-configuration`,
-  /// PR#797). The OIDC document shares the RFC 8414 field shape, so
-  /// [AuthServerMetadata.fromJson] parses either. The first endpoint that
-  /// returns a valid document wins.
+  /// Discover authorization-server metadata for the issuer
+  /// [authorizationServer]: RFC 8414 and OpenID Connect Discovery at each
+  /// well-known location in turn (path insertion first). The document must
+  /// name [authorizationServer] as its issuer exactly, or it is refused.
   ///
-  /// Sets the client's cached metadata so the existing PKCE/token flow
-  /// ([getAuthorizationUrl], [exchangeCodeForToken], …) targets the discovered
-  /// endpoints. No cryptography is performed here — these are metadata fetches.
+  /// Sets the client's cached metadata so the PKCE/token flow targets it.
   Future<AuthServerMetadata> discoverAuthorizationServer(
       String authorizationServer) async {
-    final origin = Uri.parse(authorizationServer).origin;
-    final candidates = <Uri>[
-      Uri.parse('$origin/.well-known/oauth-authorization-server'),
-      Uri.parse('$origin/.well-known/openid-configuration'),
-    ];
-
     OAuthError? lastError;
-    for (final url in candidates) {
+    for (final url in authorizationServerMetadataUrls(authorizationServer)) {
+      final http.Response response;
       try {
-        final response = await _httpClient.get(
-          url,
-          headers: {'Accept': 'application/json'},
-        );
-        if (response.statusCode != 200) {
-          lastError = OAuthError(
-            error: 'as_discovery_failed',
-            errorDescription: 'AS metadata ($url): ${response.statusCode}',
-          );
-          continue;
-        }
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        final metadata = AuthServerMetadata.fromJson(json);
-        _metadata = metadata;
-        return metadata;
+        response = await _httpClient.get(url, headers: {'Accept': 'application/json'});
       } catch (e) {
-        lastError = e is OAuthError
-            ? e
-            : OAuthError(
-                error: 'as_discovery_failed',
-                errorDescription: 'AS metadata ($url): $e',
-              );
+        lastError = OAuthError(error: 'as_discovery_failed', errorDescription: 'AS metadata ($url): $e');
+        continue;
       }
+      if (response.statusCode != 200) {
+        lastError = OAuthError(
+            error: 'as_discovery_failed', errorDescription: 'AS metadata ($url): ${response.statusCode}');
+        continue;
+      }
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      if (json['issuer'] != authorizationServer) {
+        throw OAuthError(
+          error: 'invalid_issuer',
+          errorDescription: 'Metadata at $url names issuer ${json['issuer']}, not $authorizationServer',
+        );
+      }
+      final metadata = AuthServerMetadata.fromJson(json);
+      _metadata = metadata;
+      return metadata;
     }
     throw lastError ??
         OAuthError(
           error: 'as_discovery_failed',
-          errorDescription:
-              'No authorization-server metadata found for '
-              '$authorizationServer',
+          errorDescription: 'No authorization-server metadata found for $authorizationServer',
         );
   }
 
@@ -193,11 +182,21 @@ class HttpOAuthClient implements OAuthClient {
   }) async {
     final challenge = WwwAuthenticateChallenge.parse(wwwAuthenticate);
 
-    final prmUrl = challenge?.resourceMetadata != null
-        ? Uri.parse(challenge!.resourceMetadata!)
-        : wellKnownProtectedResourceUrl(resourceUrl);
-
-    final prm = await fetchProtectedResourceMetadata(prmUrl);
+    final candidates = challenge?.resourceMetadata != null
+        ? [Uri.parse(challenge!.resourceMetadata!)]
+        : protectedResourceMetadataUrls(resourceUrl);
+    ProtectedResourceMetadata? found;
+    OAuthError? lastError;
+    for (final url in candidates) {
+      try {
+        found = await fetchProtectedResourceMetadata(url);
+        break;
+      } on OAuthError catch (e) {
+        lastError = e;
+      }
+    }
+    final prm = found ?? (throw lastError!);
+    if (prm.resource.isNotEmpty) _resource = canonicalResourceUri(prm.resource);
     final authServer = prm.primaryAuthorizationServer;
     if (authServer == null) {
       throw OAuthError(
@@ -243,19 +242,28 @@ class HttpOAuthClient implements OAuthClient {
     Map<String, String>? additionalParams,
   }) async {
     final metadata = await _discoverMetadata();
+    // PKCE support is read from the metadata; without it there is no flow.
+    if (!(metadata.codeChallengeMethodsSupported ?? const []).contains('S256')) {
+      throw OAuthError(
+        error: 'pkce_unsupported',
+        errorDescription: '${metadata.issuer} does not advertise PKCE with S256; refusing to proceed',
+      );
+    }
     final pkce = _generatePkce();
 
     // Store code verifier for later use
     _codeVerifier = pkce['code_verifier']!;
+    _state = state ?? _generateState();
 
     final params = <String, String>{
       'response_type': 'code',
       'client_id': effectiveClientId,
       'code_challenge': pkce['code_challenge']!,
-      'code_challenge_method': config.codeChallengeMethod,
+      'code_challenge_method': 'S256',
       if (config.redirectUri != null) 'redirect_uri': config.redirectUri!,
       if (scopes.isNotEmpty) 'scope': scopes.join(' '),
-      if (state != null) 'state': state,
+      'state': _state!,
+      if (resource != null) 'resource': resource!,
       ...?additionalParams,
     };
 
@@ -267,29 +275,26 @@ class HttpOAuthClient implements OAuthClient {
   }
 
   String? _codeVerifier;
+  String? _state;
 
   /// Get the current code verifier for PKCE
   String? get codeVerifier => _codeVerifier;
 
-  /// Validate the `iss` parameter returned on an authorization response
-  /// against the authorization server's issuer (RFC 9207, MCP 2026-07-28 auth
-  /// hardening). Defends against mix-up attacks: a response's `iss` MUST equal
-  /// the discovered AS issuer. Throws [OAuthError] on mismatch. A null
-  /// [responseIssuer] is tolerated only when the AS did not advertise
-  /// `authorization_response_iss_parameter_supported` — callers that receive
-  /// an `iss` MUST pass it.
+  /// The `state` of the last authorization URL: the redirect must return it.
+  String? get state => _state;
+
+  /// Validate the `iss` parameter of an authorization response (RFC 9207,
+  /// as MCP applies it): a present one must equal the issuer exactly; an
+  /// absent one is refused when the server advertises
+  /// `authorization_response_iss_parameter_supported`. Throws [OAuthError].
   Future<void> validateAuthorizationResponseIssuer(
       String? responseIssuer) async {
-    if (responseIssuer == null) return;
     final metadata = await _discoverMetadata();
-    if (responseIssuer != metadata.issuer) {
-      throw OAuthError(
-        error: 'invalid_issuer',
-        errorDescription:
-            'Authorization response `iss` ($responseIssuer) does not match '
-            'the authorization server issuer (${metadata.issuer}) — RFC 9207.',
-      );
-    }
+    checkAuthorizationResponseIssuer(
+      recordedIssuer: metadata.issuer,
+      issParameterSupported: metadata.authorizationResponseIssParameterSupported,
+      iss: responseIssuer,
+    );
   }
 
   /// Exchange an authorization code for tokens. When the authorization
@@ -311,6 +316,7 @@ class HttpOAuthClient implements OAuthClient {
       'client_id': effectiveClientId,
       'code_verifier': codeVerifier,
       if (config.redirectUri != null) 'redirect_uri': config.redirectUri!,
+      if (resource != null) 'resource': resource!,
     };
 
     final headers = <String, String>{
@@ -351,6 +357,7 @@ class HttpOAuthClient implements OAuthClient {
       'grant_type': 'refresh_token',
       'refresh_token': refreshToken,
       'client_id': effectiveClientId,
+      if (resource != null) 'resource': resource!,
     };
 
     final headers = <String, String>{
@@ -427,6 +434,7 @@ class HttpOAuthClient implements OAuthClient {
       'grant_type': 'client_credentials',
       'client_id': effectiveClientId,
       if (scopes != null && scopes.isNotEmpty) 'scope': scopes.join(' '),
+      if (resource != null) 'resource': resource!,
     };
 
     final headers = <String, String>{
@@ -495,6 +503,7 @@ class HttpOAuthClient implements OAuthClient {
       'client_id': effectiveClientId,
       'scope': scopes.join(' '),
       'state': state ?? _generateState(),
+      if (resource != null) 'resource': resource!,
     };
 
     if (redirectUri != null) {
@@ -680,15 +689,12 @@ class OAuthTokenManager {
     return expiresAt.difference(now) <= threshold;
   }
 
-  /// Stores the token in memory; persists to secure storage when [persistent] is true.
-  Future<void> storeToken(OAuthToken token, {bool persistent = false}) async {
+  /// Holds [token] in memory and schedules its refresh. Keeping tokens
+  /// across restarts is [OAuthStore]'s job (see [McpOAuth]).
+  Future<void> storeToken(OAuthToken token) async {
     _currentToken = token;
     _tokenController.add(token);
     _scheduleRefresh();
-
-    if (persistent) {
-      await _persistToken(token);
-    }
   }
 
   /// Replaces the current token with [newToken] and fires the refresh callback.
@@ -730,26 +736,6 @@ class OAuthTokenManager {
     _currentToken = null;
   }
 
-  /// Loads previously persisted tokens.
-  Future<void> loadPersistedTokens() async {
-    // TODO: integrate with SecureStorage. Empty placeholder for tests.
-  }
-
-  /// Stores an encrypted token.
-  Future<void> storeEncryptedToken(
-    OAuthToken token,
-    String encryptionKey,
-  ) async {
-    // TODO: apply real encryption logic.
-    await storeToken(token, persistent: true);
-  }
-
-  /// Loads an encrypted token.
-  Future<OAuthToken?> loadEncryptedToken(String encryptionKey) async {
-    // TODO: apply real decryption logic.
-    return _currentToken;
-  }
-
   /// Checks token expiry and emits a near-expiry lifecycle event when due.
   Future<void> checkTokenExpiry() async {
     if (willExpireSoon()) {
@@ -775,11 +761,6 @@ class OAuthTokenManager {
   /// Stops the background refresh timer.
   void stopBackgroundRefresh() {
     _refreshTimer?.cancel();
-  }
-
-  // Persists the token (internal).
-  Future<void> _persistToken(OAuthToken token) async {
-    // TODO: integrate with SecureStorage.
   }
 
   // Callbacks and event streams.
