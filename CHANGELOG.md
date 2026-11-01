@@ -1,3 +1,37 @@
+## 3.0.1
+
+Fixes found in an audit of 3.0.0.
+
+### Fixed
+- **Connecting again with the same `Client` multiplied every answer.** `connect`
+  added a message listener each time and never removed it, so after n
+  connections a notification ran its handler n times and a server request
+  (`sampling/createMessage`, `elicitation/create`, `roots/list`) was answered n
+  times (n model calls). The listeners end with the connection.
+- **A stdio server that failed at start-up left no trace.** Its standard
+  error was only logged at debug level and its exit code dropped, so the caller
+  got "Transport disconnected". The error now says how the process ended and
+  what its standard error ended with
+  (`Transport disconnected: the server process exited with code 3; its
+  standard error ended with: fatal: OPENAI_API_KEY is not set`).
+  `StdioClientTransport.stderr` streams the lines; `exitCode` reports the code.
+- A byte that is not UTF-8 on a server's standard output (or on an SSE stream)
+  ended the connection; it is read as U+FFFD like any other noise.
+- Streamable HTTP: the stream the server uses to reach the client (GET) was not
+  opened again after a network failure, only after the server closed it; it is
+  retried with growing pauses.
+- The cache of results (`cacheResults`) had no bound; it keeps the 256 newest.
+
+### Deprecated
+- `StreamableHttpTransportConfig.sseReadTimeout` was never read; it says so. A test now fails
+  for any configuration field nothing reads.
+
+### Added
+- `runInShell` on `StdioClientTransport.create` and
+  `McpClient.createStdioTransport` (on Windows a command such as `npx` is a
+  `.cmd` file and starts only through the shell).
+- `TransportClosureReason`: a transport that can say why its connection ended.
+
 ## 3.0.0
 
 **Breaking — see `MIGRATION-3.0.md`.**

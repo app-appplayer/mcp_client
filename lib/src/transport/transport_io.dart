@@ -10,11 +10,19 @@ import 'event_source.dart';
 final Logger _logger = Logger('mcp_client.transport');
 
 /// Transport implementation using standard input/output streams
-class StdioClientTransport implements ClientTransport {
+class StdioClientTransport implements ClientTransport, TransportClosureReason {
   final Process _process;
   final _messageController = StreamController<dynamic>.broadcast();
   final List<StreamSubscription> _processSubscriptions = [];
   final _closeCompleter = Completer<void>();
+
+  /// What the server wrote to its standard error, line by line.
+  final _stderrController = StreamController<String>.broadcast();
+  final List<String> _stderrTail = [];
+  static const int _stderrTailLines = 20;
+  final _stderrDone = Completer<void>();
+  int? _exitCode;
+  bool _closedByUs = false;
 
   // Message queue for synchronized sending
   /// Set once [close] begins: nothing more is written to the server.
@@ -25,11 +33,15 @@ class StdioClientTransport implements ClientTransport {
   }
 
   /// Create a new STDIO transport by spawning a process
+  ///
+  /// [runInShell] starts the command through the system shell. On Windows a
+  /// command such as `npx` is a `.cmd` file that can be started that way only.
   static Future<StdioClientTransport> create({
     required String command,
     List<String> arguments = const [],
     String? workingDirectory,
     Map<String, String>? environment,
+    bool runInShell = false,
   }) async {
     _logger.debug('Starting process: $command ${arguments.join(' ')}');
 
@@ -38,6 +50,7 @@ class StdioClientTransport implements ClientTransport {
       arguments,
       workingDirectory: workingDirectory,
       environment: environment,
+      runInShell: runInShell,
     );
 
     return StdioClientTransport._internal(process);
@@ -48,7 +61,9 @@ class StdioClientTransport implements ClientTransport {
 
     // Process stdout stream and handle messages
     var stdoutSubscription = _process.stdout
-        .transform(utf8.decoder)
+        // A byte that is not UTF-8 becomes U+FFFD and its line fails to parse
+        // like any other noise; it must not end the connection.
+        .transform(const Utf8Decoder(allowMalformed: true))
         .transform(const LineSplitter())
         .where((line) => line.isNotEmpty)
         .map((line) {
@@ -91,12 +106,20 @@ class StdioClientTransport implements ClientTransport {
       _logger.debug('Server stdin: $e');
     }));
 
-    // Log stderr output
+    // Keep the end of the server's stderr: when it dies at start-up, that is
+    // where it says why.
     var stderrSubscription = _process.stderr
-        .transform(utf8.decoder)
+        .transform(const Utf8Decoder(allowMalformed: true))
         .transform(const LineSplitter())
         .listen((line) {
           _logger.debug('Server stderr: $line');
+          _stderrTail.add(line.length > 500 ? '${line.substring(0, 500)}…' : line);
+          if (_stderrTail.length > _stderrTailLines) _stderrTail.removeAt(0);
+          if (!_stderrController.isClosed) _stderrController.add(line);
+        }, onDone: () {
+          if (!_stderrDone.isCompleted) _stderrDone.complete();
+        }, onError: (Object _) {
+          if (!_stderrDone.isCompleted) _stderrDone.complete();
         });
 
     _processSubscriptions.add(stderrSubscription);
@@ -104,8 +127,26 @@ class StdioClientTransport implements ClientTransport {
     // Handle process exit
     _process.exitCode.then((exitCode) {
       _logger.debug('Process exited with code: $exitCode');
+      _exitCode = exitCode;
       _handleStreamClosure();
     });
+  }
+
+  /// What the server writes to its standard error, a line at a time.
+  Stream<String> get stderr => _stderrController.stream;
+
+  /// The server process's exit code, once it has exited.
+  int? get exitCode => _exitCode;
+
+  @override
+  String? get closeReason {
+    if (_closedByUs) return null;
+    final code = _exitCode;
+    final tail = _stderrTail.where((l) => l.trim().isNotEmpty).toList();
+    if (code == null && tail.isEmpty) return null;
+    final buffer = StringBuffer(code == null ? 'the server process ended' : 'the server process exited with code $code');
+    if (tail.isNotEmpty) buffer.write('; its standard error ended with: ${tail.join(' | ')}');
+    return buffer.toString();
   }
 
   void _handleTransportError(dynamic error) {
@@ -118,10 +159,20 @@ class StdioClientTransport implements ClientTransport {
 
   void _handleStreamClosure() {
     _logger.debug('Handling stream closure');
-    if (!_closeCompleter.isCompleted) {
-      _closeCompleter.complete();
+    if (_closeCompleter.isCompleted) {
+      _cleanup();
+      return;
     }
-    _cleanup();
+    // The ends of stdout, stderr and the process arrive in any order. The
+    // reason (exit code, what stderr said) is part of what "closed" means, so
+    // give them a moment to arrive before telling the client.
+    Future.wait<Object?>([
+      _process.exitCode,
+      _stderrDone.future,
+    ]).timeout(const Duration(milliseconds: 500), onTimeout: () => const <Object?>[]).whenComplete(() {
+      if (!_closeCompleter.isCompleted) _closeCompleter.complete();
+      _cleanup();
+    });
   }
 
   void _cleanup() {
@@ -133,6 +184,9 @@ class StdioClientTransport implements ClientTransport {
 
     if (!_messageController.isClosed) {
       _messageController.close();
+    }
+    if (!_stderrController.isClosed) {
+      _stderrController.close();
     }
 
     // Lifecycle, stdio shutdown: close the server's input, wait for it to
@@ -187,6 +241,7 @@ class StdioClientTransport implements ClientTransport {
   @override
   void close() {
     _logger.debug('Closing StdioClientTransport');
+    _closedByUs = true;
     _cleanup();
   }
 }

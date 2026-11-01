@@ -16,7 +16,7 @@ const String _unsupported =
     'Use StreamableHttpClientTransport instead.';
 
 /// Process-backed STDIO transport. Native platforms only.
-class StdioClientTransport implements ClientTransport {
+class StdioClientTransport implements ClientTransport, TransportClosureReason {
   StdioClientTransport._();
 
   /// Always throws on this platform — there is no process to spawn.
@@ -25,9 +25,19 @@ class StdioClientTransport implements ClientTransport {
     List<String> arguments = const [],
     String? workingDirectory,
     Map<String, String>? environment,
+    bool runInShell = false,
   }) async {
     throw McpError('STDIO transport: $_unsupported');
   }
+
+  /// There is no process on this platform.
+  Stream<String> get stderr => const Stream<String>.empty();
+
+  /// There is no process on this platform.
+  int? get exitCode => null;
+
+  @override
+  String? get closeReason => null;
 
   @override
   Stream<dynamic> get onMessage => throw McpError('STDIO transport: $_unsupported');

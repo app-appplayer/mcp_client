@@ -424,6 +424,7 @@ class McpClient {
     List<String> arguments = const [],
     String? workingDirectory,
     Map<String, String>? environment,
+    bool runInShell = false,
   }) {
     return Results.catchingAsync(
       () => StdioClientTransport.create(
@@ -431,6 +432,7 @@ class McpClient {
         arguments: arguments,
         workingDirectory: workingDirectory,
         environment: environment,
+        runInShell: runInShell,
       ),
     );
   }

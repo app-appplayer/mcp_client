@@ -72,7 +72,7 @@ class EventSource implements stub.EventSource {
 
       // Listen to the stream
       _subscription = _response!.stream
-          .transform(utf8.decoder)
+          .transform(const Utf8Decoder(allowMalformed: true))
           .listen(
             (String chunk) {
               try {

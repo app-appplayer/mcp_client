@@ -72,7 +72,7 @@ class EventSource implements stub.EventSource {
 
       // Events, parsed as the SSE format defines them.
       _subscription = _response!
-          .transform(utf8.decoder)
+          .transform(const Utf8Decoder(allowMalformed: true))
           .transform(const LineSplitter())
           .transform(const SseParser())
           .listen(

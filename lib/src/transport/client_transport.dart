@@ -18,3 +18,13 @@ abstract class ClientTransport {
   /// Close the transport
   void close();
 }
+
+/// A transport that can say why its connection ended.
+///
+/// A client puts the reason into the error of every request the end leaves
+/// unanswered, so the caller learns more than "disconnected" — for a server
+/// process, with what code it exited and what it wrote to its standard error.
+abstract interface class TransportClosureReason {
+  /// Why the connection ended; null while it is open or when unknown.
+  String? get closeReason;
+}

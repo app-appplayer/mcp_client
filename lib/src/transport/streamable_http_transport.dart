@@ -85,7 +85,9 @@ class StreamableHttpTransportConfig {
   /// Request timeout
   final Duration timeout;
 
-  /// SSE read timeout (longer for streaming)
+  /// No effect: a stream is not given a read timeout. Bound a request with
+  /// `RequestOptions.timeout`.
+  @Deprecated('No effect: streams have no read timeout')
   final Duration sseReadTimeout;
 
   /// Maximum number of concurrent requests
@@ -107,6 +109,7 @@ class StreamableHttpTransportConfig {
     this.headersProvider,
     this.headersProviderTimeout = const Duration(seconds: 5),
     this.timeout = const Duration(seconds: 30),
+    @Deprecated('No effect: streams have no read timeout')
     this.sseReadTimeout = const Duration(minutes: 5),
     this.maxConcurrentRequests = 10,
     this.useHttp2 = true,
@@ -587,7 +590,8 @@ class StreamableHttpClientTransport implements ClientTransport {
     var cursor = from ?? const _SseCursor();
     try {
       await for (final event in bytes
-          .transform(utf8.decoder)
+          // A byte that is not UTF-8 must not end the stream.
+          .transform(const Utf8Decoder(allowMalformed: true))
           .transform(const LineSplitter())
           .transform(const SseParser())) {
         cursor = cursor.copyWith(lastEventId: event.id, retry: event.retry);
@@ -650,6 +654,10 @@ class StreamableHttpClientTransport implements ClientTransport {
     }));
   }
 
+  /// How many times in a row opening the GET stream may fail before it is
+  /// given up.
+  static const int _maxGetOpenFailures = 8;
+
   /// The session's GET stream: reconnected after the server closes it,
   /// resuming from the last event id (waiting the `retry` it asked for).
   /// Ends when the server offers no GET stream (405), the session ends, or
@@ -658,7 +666,18 @@ class StreamableHttpClientTransport implements ClientTransport {
     var cursor = const _SseCursor();
     var failures = 0;
     while (!_isClosed && _getStreamActive && _sessionId != null) {
-      final response = await _openGet(lastEventId: cursor.lastEventId);
+      final http.StreamedResponse? response;
+      try {
+        response = await _openGet(lastEventId: cursor.lastEventId);
+      } catch (e) {
+        // The network failed or the server is restarting: the stream is how
+        // the server reaches the client (notifications, sampling), so it is
+        // tried again, with growing pauses, before it is given up.
+        _logger.debug('GET stream could not be opened ($e); attempt ${failures + 1}');
+        if (++failures > _maxGetOpenFailures) break;
+        await Future<void>.delayed(Duration(seconds: 1 << min(failures, 5)));
+        continue;
+      }
       if (response == null) break;
       failures = 0;
       cursor = await _readSse(response.stream, null, from: cursor);

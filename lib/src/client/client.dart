@@ -224,7 +224,10 @@ class Client {
     // socket). Listening without a handler left that error unhandled and the
     // request completers untouched, so a request on a dead endpoint waited out
     // its 30-second timeout instead of failing when the wire did.
-    _transport!.onMessage.listen(_handleMessage, onError: _handleTransportError);
+    // Both subscriptions are cancelled when the connection ends: a client that
+    // connects again must not answer every message once per earlier connection.
+    _closureSource = transport;
+    _transportMessages = _transport!.onMessage.listen(_handleMessage, onError: _handleTransportError);
     _transport!.onClose
         .then((_) {
           // Only send disconnect event if we're still connected
@@ -243,7 +246,7 @@ class Client {
         });
 
     // Set up message handling
-    _messageController.stream.listen((message) async {
+    _processedMessages = _messageController.stream.listen((message) async {
       try {
         await _processMessage(message);
       } catch (e) {
@@ -1634,15 +1637,28 @@ class Client {
     stopKeepAlive();
     _listenedResources.clear();
     _resourceListen = null;
+    _transportMessages?.cancel();
+    _transportMessages = null;
+    _processedMessages?.cancel();
+    _processedMessages = null;
 
-    // Complete any pending requests with an error
+    // Complete any pending requests with an error. The transport may know why
+    // the connection ended (a server process that exited says with what code
+    // and what it wrote to stderr): that is what the caller needs to see.
+    final source = _closureSource;
+    final reason = source is TransportClosureReason ? (source as TransportClosureReason).closeReason : null;
+    final message = reason == null ? 'Transport disconnected' : 'Transport disconnected: $reason';
     for (final completer in _requestCompleters.values) {
       if (!completer.isCompleted) {
-        completer.completeError(McpError('Transport disconnected'));
+        completer.completeError(McpError(message));
       }
     }
     _requestCompleters.clear();
   }
+
+  StreamSubscription<dynamic>? _transportMessages;
+  StreamSubscription<JsonRpcMessage>? _processedMessages;
+  ClientTransport? _closureSource;
 
   /// Handle incoming messages from the transport
   void _handleMessage(dynamic rawMessage) {
@@ -2321,8 +2337,17 @@ class Client {
     final ttl = result['ttlMs'];
     // Absent or non-positive: immediately stale, nothing to keep.
     if (ttl is! int || ttl <= 0) return;
+    _resultCache.remove(key);
     _resultCache[key] = _CachedResult(result, DateTime.now().add(Duration(milliseconds: ttl)));
+    // Entries leave only when read again after they went stale or when a
+    // notification invalidates them; many different keys (one per resource
+    // URI) must not grow it without end. The oldest go first.
+    while (_resultCache.length > _maxCachedResults) {
+      _resultCache.remove(_resultCache.keys.first);
+    }
   }
+
+  static const int _maxCachedResults = 256;
 
   /// A notification that says cached results are out of date.
   void _invalidateCache(String method, Map<String, dynamic> params) {

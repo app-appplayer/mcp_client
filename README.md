@@ -365,6 +365,13 @@ final transport = transportResult.fold((t) => t, (error) => throw error);
 await client.connect(transport);
 ```
 
+A stdio server is a child process. Pass what it reads from its environment with
+`environment:` (API keys) and its folder with `workingDirectory:`; on Windows
+start a `.cmd` command such as `npx` with `runInShell: true`. When the server
+dies at start-up the error says how: `Transport disconnected: the server process
+exited with code 3; its standard error ended with: …`; the lines it writes are
+on `transport.stderr`.
+
 ### Server-Sent Events (SSE)
 
 For HTTP-based communication with enhanced features:
