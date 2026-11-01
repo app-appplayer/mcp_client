@@ -22,7 +22,7 @@ class SseAuthClientTransport implements ClientTransport {
   final OAuthToken? _oauthToken;
   final OAuthClient? _oauthClient;
   final _messageController = StreamController<dynamic>.broadcast();
-  final _closeCompleter = Completer<void>();
+  final _closeCompleter = Completer<void>()..future.ignore();
 
   late AuthenticatedEventSource _eventSource;
   String? _messageEndpoint;
@@ -81,7 +81,7 @@ class SseAuthClientTransport implements ClientTransport {
       );
 
       // Set up event handlers
-      final endpointCompleter = Completer<String>();
+      final endpointCompleter = Completer<String>()..future.ignore();
 
       await transport._eventSource.connect(
         serverUrl,
@@ -203,7 +203,7 @@ class SseAuthClientTransport implements ClientTransport {
     _eventSource = AuthenticatedEventSource();
 
     // Reconnect
-    final endpointCompleter = Completer<String>();
+    final endpointCompleter = Completer<String>()..future.ignore();
 
     await _eventSource.connect(
       serverUrl,

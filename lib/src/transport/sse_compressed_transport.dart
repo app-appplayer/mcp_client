@@ -37,7 +37,7 @@ class SseCompressedClientTransport implements ClientTransport {
   final List<CompressionType> _supportedCompressions;
   final int _compressionThreshold;
   final _messageController = StreamController<dynamic>.broadcast();
-  final _closeCompleter = Completer<void>();
+  final _closeCompleter = Completer<void>()..future.ignore();
 
   late CompressedEventSource _eventSource;
   String? _messageEndpoint;
@@ -96,7 +96,7 @@ class SseCompressedClientTransport implements ClientTransport {
       _logger.debug('Connecting with compression support: $acceptEncodings');
 
       // Set up event handlers
-      final endpointCompleter = Completer<String>();
+      final endpointCompleter = Completer<String>()..future.ignore();
 
       await transport._eventSource.connect(
         serverUrl,

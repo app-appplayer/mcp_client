@@ -1,6 +1,6 @@
 name: mcp_client
 description: "Dart MCP client for every protocol revision, 2024-11-05 through 2026-07-28 (stateless): capability negotiation, OAuth 2.1, stdio / SSE / Streamable HTTP."
-version: 3.0.1
+version: 3.0.2
 homepage: https://app-appplayer.github.io/makemind
 repository: https://github.com/app-appplayer/mcp_client
 issue_tracker: https://github.com/app-appplayer/mcp_client/issues

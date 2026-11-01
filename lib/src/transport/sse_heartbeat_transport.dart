@@ -87,7 +87,7 @@ class SseHeartbeatClientTransport implements ClientTransport {
   final Map<String, String> _baseHeaders;
   final HeartbeatConfig _heartbeatConfig;
   final _messageController = StreamController<dynamic>.broadcast();
-  final _closeCompleter = Completer<void>();
+  final _closeCompleter = Completer<void>()..future.ignore();
   final _healthController = StreamController<ConnectionHealth>.broadcast();
 
   late HeartbeatEventSource _eventSource;
@@ -149,7 +149,7 @@ class SseHeartbeatClientTransport implements ClientTransport {
     _logger.debug('Establishing heartbeat connection to: $serverUrl');
 
     // Set up event handlers
-    final endpointCompleter = Completer<String>();
+    final endpointCompleter = Completer<String>()..future.ignore();
 
     await _eventSource.connect(
       serverUrl,

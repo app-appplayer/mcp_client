@@ -1,3 +1,13 @@
+## 3.0.2
+
+### Fixed
+- **A connection that failed while opening leaked an error nobody could catch.**
+  `SseClientTransport.create` against a server that answers 401, or a port nobody
+  listens on, raised `McpError` for the caller and, on top of it, two more errors
+  (the opening's completers) into the zone — in a plain Dart program that ends the
+  process. The same pattern in the stdio, heartbeat, auth and compressed SSE
+  transports. The failure now reaches the caller once and nothing else.
+
 ## 3.0.1
 
 Fixes found in an audit of 3.0.0.

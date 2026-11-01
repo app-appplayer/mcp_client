@@ -29,6 +29,7 @@ class StdioClientTransport implements ClientTransport, TransportClosureReason {
   bool _stdinClosed = false;
 
   StdioClientTransport._internal(this._process) {
+    _closeCompleter.future.ignore();
     _initialize();
   }
 
@@ -258,7 +259,12 @@ class SseClientTransport implements ClientTransport {
   bool _isClosed = false;
 
   // Private constructor
-  SseClientTransport._internal({required this.serverUrl, this.headers});
+  SseClientTransport._internal({required this.serverUrl, this.headers}) {
+    // The error that ends the connection is for whoever listens to `onClose`;
+    // when nobody does (the connection failed while it was being opened) it
+    // must not escape as an unhandled error.
+    _closeCompleter.future.ignore();
+  }
 
   // Factory method for creation
   static Future<SseClientTransport> create({
@@ -282,6 +288,10 @@ class SseClientTransport implements ClientTransport {
 
       // Set up event handlers
       final endpointCompleter = Completer<String>();
+      // A failure while connecting reaches the caller through `connect`; the
+      // completer is only awaited after a successful connect, so its error
+      // must not escape when connecting fails first.
+      endpointCompleter.future.ignore();
 
       await transport._eventSource.connect(
         sseUrlWithSession,
